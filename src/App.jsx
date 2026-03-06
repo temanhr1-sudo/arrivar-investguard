@@ -332,6 +332,8 @@ export default function App() {
       } else {
         await supabase.from("portfolio").insert([{ user_id:session.user.id,stock_code:code,sector:addStock?.s||"IDX",lot,shares,avg_price:price,close_price:price }])
       }
+      // Kurangi capital saat beli agar cash balance benar
+      await supabase.from("profiles").update({ capital:(profile.capital||0)-cost }).eq("id",session.user.id)
       await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,nominal:cost,type:"BUY" }])
       await loadData(session.user.id); setAddModal(false); setBuyLot(""); setBuyPrice("")
       setTab("portfolio"); notify(`✅ Beli ${code} ${lot} lot sukses!`,"green")
@@ -342,13 +344,17 @@ export default function App() {
     const lot=parseInt(sellLot), price=parseFloat(sellPrice)
     if (!lot||!price) { notify("Isi lot dan harga","amber"); return }
     if (lot>sellStock.lot) { notify(`Maks ${sellStock.lot} lot`,"red"); return }
-    const shares=lot*100, pnl=(price-sellStock.avg_price)*shares
+    const shares=lot*100
+    const pnl=Math.round((price-sellStock.avg_price)*shares)
+    const proceeds=shares*price
     const remaining=sellStock.shares-shares
     try {
-      await supabase.from("profiles").update({ capital:(profile.capital||0)+pnl }).eq("id",session.user.id)
+      // Capital += proceeds (uang masuk dari jual). Modal asal sudah dikurangi saat beli.
+      const newCapital=(profile.capital||0)+proceeds
+      await supabase.from("profiles").update({ capital:newCapital }).eq("id",session.user.id)
       if (remaining===0) await supabase.from("portfolio").delete().eq("id",sellStock.id)
       else await supabase.from("portfolio").update({ lot:sellStock.lot-lot,shares:remaining,close_price:price }).eq("id",sellStock.id)
-      await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:sellStock.stock_code,date:getTodayDateString(),lot,shares,avg_price:sellStock.avg_price,close_price:price,pnl,nominal:shares*price,type:"SELL" }])
+      await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:sellStock.stock_code,date:getTodayDateString(),lot,shares,avg_price:sellStock.avg_price,close_price:price,pnl,nominal:proceeds,type:"SELL" }])
       await loadData(session.user.id); setSellModal(false); setSellLot(""); setSellPrice("")
       notify(`P&L: ${pnl>=0?"+":""}Rp ${formatRupiah(pnl)}`, pnl>=0?"green":"red")
     } catch(e) { notify("Gagal: "+e.message,"red") }
@@ -362,26 +368,33 @@ export default function App() {
   const cash       = Math.max(0, capital - invested)
   const cashPct    = capital>0 ? (cash/capital)*100 : 100
   const totalEquity= capital + unrealPnL
-  const realizedPnL= journal.filter(j=>j.type==="SELL").reduce((s,j)=>s+(j.pnl||0),0)
+  const realizedPnL= journal.filter(j=>j.type==="SELL").reduce((s,j)=>s+(Number(j.pnl)||0),0)
   const totalBuy   = journal.filter(j=>j.type==="BUY").length
   const totalSell  = journal.filter(j=>j.type==="SELL").length
-  const winTrades  = journal.filter(j=>j.type==="SELL"&&(j.pnl||0)>0).length
+  const winTrades  = journal.filter(j=>j.type==="SELL"&&Number(j.pnl||0)>0).length
   const tradeWinRate = totalSell>0 ? (winTrades/totalSell)*100 : 0
   const winPos     = portfolio.filter(p=>(liveCache[p.stock_code]?.price||p.close_price)>p.avg_price).length
   const posWinRate = portfolio.length>0 ? (winPos/portfolio.length)*100 : 0
   const cashStatus = cashPct<10 ? "red" : cashPct<20 ? "amber" : "green"
 
   // Screener filter
+  // Auto-load screener data when filter is clicked and data not yet loaded
+  useEffect(() => {
+    if (screenerFilter !== "Semua" && !screenerLoaded && !syncing) {
+      loadScreener()
+    }
+  }, [screenerFilter, screenerLoaded, syncing, loadScreener])
+
   const screenerList = (() => {
     let list=[...screenerData]
     if (screenerQ.trim()) {
       const q=screenerQ.toUpperCase()
       list=list.filter(s=>s.c.includes(q)||s.n.toUpperCase().includes(q))
     }
-    if (screenerFilter==="Dividen") list=list.filter(s=>s.dy>=5).sort((a,b)=>b.dy-a.dy)
+    if (screenerFilter==="Dividen") list=list.filter(s=>s.dy>0&&s.dy>=5).sort((a,b)=>b.dy-a.dy)
     else if (screenerFilter==="PBV") list=list.filter(s=>s.pbv>0&&s.pbv<1).sort((a,b)=>a.pbv-b.pbv)
     else if (screenerFilter==="PE")  list=list.filter(s=>s.pe>0&&s.pe<12).sort((a,b)=>a.pe-b.pe)
-    else if (screenerFilter==="ROE") list=list.filter(s=>s.roe>15).sort((a,b)=>b.roe-a.roe)
+    else if (screenerFilter==="ROE") list=list.filter(s=>s.roe>0&&s.roe>15).sort((a,b)=>b.roe-a.roe)
     return list.slice(0,40)
   })()
 
@@ -594,7 +607,34 @@ export default function App() {
                           ))}
                         </div>
                       </div>
-                      <Advisory type={adv[0].type} text={adv[0].text}/>
+                      {adv.map((a,ai)=><Advisory key={ai} type={a.type} text={a.text}/>)}
+
+                      {/* ── Saran Average Down / Up ── */}
+                      {mm.canBuyLot > 0 && mm.pnlPct > -8 && (
+                        <div style={{ background:T.bg2,border:`1px solid ${T.bdr}`,borderRadius:16,padding:16,marginTop:8 }}>
+                          <div style={{ fontSize:10,fontWeight:800,color:T.t2,letterSpacing:1,marginBottom:12,display:"flex",alignItems:"center",gap:6 }}>
+                            <ShieldCheck size={13} color={T.t3}/> SARAN AKUMULASI
+                          </div>
+                          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px 16px",marginBottom:12 }}>
+                            {[
+                              ["MAX LOT AMAN",`${mm.canBuyLot} Lot`,T.blue],
+                              ["EST AVG BARU",`Rp ${formatRupiah(mm.projectedNewAvg)}`,T.amber],
+                              [mm.pnlPct<0?"LEVEL AVG DOWN":"LEVEL AVG UP",`Rp ${formatRupiah(mm.pnlPct<0?mm.adLvl:mm.auLvl)}`,mm.pnlPct<0?T.red:T.green],
+                              ["BIAYA EST",`Rp ${formatRupiahCompact(mm.canBuyLot*100*(liveCache[pos.stock_code]?.price||pos.close_price||pos.avg_price))}`,T.t1],
+                            ].map(([lbl,val,col])=>(
+                              <div key={lbl} style={{ display:"flex",justifyContent:"space-between",fontSize:12 }}>
+                                <span style={{ color:T.t3,fontWeight:600 }}>{lbl}</span>
+                                <strong style={{ color:col }}>{val}</strong>
+                              </div>
+                            ))}
+                          </div>
+                          <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(mm.canBuyLot)); setBuyPrice(String(liveCache[pos.stock_code]?.price||pos.close_price||pos.avg_price)); setAddModal(true) }}
+                            style={{ width:"100%",background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:12,padding:"10px 0",fontSize:12,fontWeight:800,color:T.blue,cursor:"pointer" }}
+                            className="tap">
+                            ⚡ Eksekusi {mm.canBuyLot} Lot ({mm.pnlPct<0?"Avg Down":"Avg Up"})
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:1,background:T.bdr2 }}>
                       <button onClick={()=>{ setSellStock(pos); setSellModal(true) }} style={{ background:T.bg1,border:"none",padding:16,fontSize:13,fontWeight:800,color:T.red,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:6 }} className="tap">
@@ -647,6 +687,12 @@ export default function App() {
             </div>
 
             <div style={{ display:"grid",gap:12 }}>
+              {screenerList.length===0&&!screenerLoaded&&syncing && (
+                <div style={{ textAlign:"center",padding:"40px 20px",color:T.amber,fontSize:13,fontWeight:600 }}>
+                  <div style={{ display:"flex",alignItems:"center",justifyContent:"center",gap:8 }}><Spinner size={18}/> Memuat data saham IDX...</div>
+                  <p style={{ marginTop:8,color:T.t3,fontSize:12 }}>Menarik data fundamental untuk filter {screenerFilter}...</p>
+                </div>
+              )}
               {screenerList.length===0&&screenerLoaded && (
                 <div style={{ textAlign:"center",padding:"40px 20px",color:T.t3 }}>
                   <Filter size={32} style={{ margin:"0 auto 12px",opacity:0.5 }}/><p>Tidak ada saham sesuai filter ini.</p>
