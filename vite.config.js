@@ -5,6 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      // Proxy untuk local dev: /api/yahoo → Yahoo Finance langsung
+      // Di Vercel production: request ditangani api/yahoo.js (serverless)
       '/api/yahoo': {
         target: 'https://query2.finance.yahoo.com',
         changeOrigin: true,
@@ -22,9 +24,6 @@ export default defineConfig({
             proxyReq.setHeader('Accept-Language', 'en-US,en;q=0.9')
             proxyReq.setHeader('Referer', 'https://finance.yahoo.com/')
             proxyReq.setHeader('Origin', 'https://finance.yahoo.com')
-          })
-          proxy.on('error', (err) => {
-            console.error('[Proxy] Yahoo Finance error:', err.message)
           })
         }
       }
