@@ -124,18 +124,19 @@ const BottomNav = ({ tab, setTab }) => {
   const items = [
     { id:"portfolio", label:"Portofolio", Icon:LayoutDashboard },
     { id:"screener",  label:"Screener",   Icon:Search },
-    { id:"jurnal",    label:"Jurnal",      Icon:BookOpen },
-    { id:"monitor",   label:"Monitor",     Icon:BarChart2 },
-    { id:"bandar",    label:"Bandar",      Icon:Activity },
+    { id:"jurnal",    label:"Jurnal",     Icon:BookOpen },
+    { id:"monitor",   label:"Monitor",    Icon:BarChart2 },
+    { id:"forecast",  label:"Forecast",   Icon:TrendingUp },
+    { id:"bandar",    label:"Bandar",     Icon:Activity },
   ]
   return (
-    <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100,background:T.navBg,backdropFilter:"blur(20px)",borderTop:`1px solid ${T.bdr2}`,display:"flex",padding:"10px 8px calc(10px + env(safe-area-inset-bottom))" }}>
+    <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100,background:T.navBg,backdropFilter:"blur(20px)",borderTop:`1px solid ${T.bdr2}`,display:"flex",padding:"8px 4px calc(8px + env(safe-area-inset-bottom))" }}>
       {items.map(({ id, label, Icon }) => {
         const active = tab===id
         return (
-          <button key={id} onClick={()=>setTab(id)} style={{ background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:5,flex:1 }}>
-            <Icon size={22} color={active?T.em:T.t3} strokeWidth={active?2.5:2} style={{ transition:"all 0.2s",transform:active?"scale(1.15)":"scale(1)" }}/>
-            <span style={{ fontSize:10,fontWeight:active?800:600,color:active?T.em:T.t3,transition:"all 0.2s" }}>{label}</span>
+          <button key={id} onClick={()=>setTab(id)} style={{ background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,flex:1,minWidth:0 }}>
+            <Icon size={20} color={active?T.em:T.t3} strokeWidth={active?2.5:2} style={{ transition:"all 0.2s",transform:active?"scale(1.1)":"scale(1)",flexShrink:0 }}/>
+            <span style={{ fontSize:9,fontWeight:active?800:600,color:active?T.em:T.t3,transition:"all 0.2s",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",width:"100%",textAlign:"center" }}>{label}</span>
           </button>
         )
       })}
@@ -311,7 +312,14 @@ export default function App() {
     const newCap = (profile.capital||0) + amount
     const { error } = await supabase.from("profiles").update({ capital:newCap }).eq("id",session.user.id)
     if (error) { notify("Gagal: "+error.message,"red"); return }
-    await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"CASH_IN",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,nominal:amount,type:"TOPUP" }])
+    // journal: hanya kolom yg ada di DB (no type/nominal)
+    await supabase.from("journal").insert([{
+      user_id:session.user.id, stock_code:"__TOPUP__",
+      date:getTodayDateString(), lot:0, shares:0,
+      avg_price:0, close_price:0,
+      pos_val:amount, cur_val:amount, pnl:0, pnl_pct:0, alloc_pct:0,
+      suggestions: JSON.stringify([{t:"blue",msg:`Top Up Rp ${amount}`}])
+    }])
     await loadData(session.user.id); setTopupModal(false); setTopupVal("")
     notify(`Top up Rp ${formatRupiah(amount)} berhasil`,"green")
   }
@@ -332,7 +340,16 @@ export default function App() {
       } else {
         await supabase.from("portfolio").insert([{ user_id:session.user.id,stock_code:code,sector:addStock?.s||"IDX",lot,shares,avg_price:price,close_price:price }])
       }
-      const { error: journalErr } = await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,nominal:cost,type:"BUY",pnl:0 }])
+      const posVal = shares * price
+      const allocPct = capital > 0 ? (posVal / capital) * 100 : 0
+      const { error: journalErr } = await supabase.from("journal").insert([{
+        user_id:session.user.id, stock_code:code,
+        date:getTodayDateString(), lot, shares,
+        avg_price:price, close_price:price,
+        pos_val:posVal, cur_val:posVal, pnl:0, pnl_pct:0,
+        alloc_pct:Math.round(allocPct*100)/100,
+        suggestions: JSON.stringify([{t:"blue",msg:`BUY ${lot} lot @ ${price}`}])
+      }])
       if (journalErr) { notify("Jurnal error: "+journalErr.message,"red"); console.error("Journal BUY error:",journalErr); return }
       await loadData(session.user.id); setAddModal(false); setBuyLot(""); setBuyPrice("")
       setTab("portfolio"); notify(`✅ Beli ${code} ${lot} lot sukses!`,"green")
@@ -356,6 +373,10 @@ export default function App() {
       await supabase.from("profiles").update({ capital: newCapital }).eq("id",session.user.id)
       if (remaining===0) await supabase.from("portfolio").delete().eq("id",sellStock.id)
       else await supabase.from("portfolio").update({ lot:sellStock.lot-lot,shares:remaining,close_price:price }).eq("id",sellStock.id)
+      const sellPosVal = shares * sellStock.avg_price
+      const sellCurVal = shares * price
+      const sellAllocPct = capital > 0 ? (sellPosVal / capital) * 100 : 0
+      const pnlPct = sellStock.avg_price > 0 ? ((price - sellStock.avg_price) / sellStock.avg_price) * 100 : 0
       const { error: sellJournalErr } = await supabase.from("journal").insert([{
         user_id:session.user.id,
         stock_code:sellStock.stock_code,
@@ -363,9 +384,12 @@ export default function App() {
         lot, shares,
         avg_price:sellStock.avg_price,
         close_price:price,
+        pos_val:sellPosVal,
+        cur_val:sellCurVal,
         pnl: Math.round(realizedPnlThisTrade),
-        nominal,
-        type:"SELL"
+        pnl_pct: Math.round(pnlPct*100)/100,
+        alloc_pct: Math.round(sellAllocPct*100)/100,
+        suggestions: JSON.stringify([{t:realizedPnlThisTrade>=0?"green":"red",msg:`SELL ${lot} lot @ ${price} | PnL: ${Math.round(realizedPnlThisTrade)}`}])
       }])
       if (sellJournalErr) { notify("Jurnal error: "+sellJournalErr.message,"red"); console.error("Journal SELL error:",sellJournalErr); return }
       await loadData(session.user.id); setSellModal(false); setSellLot(""); setSellPrice("")
@@ -381,14 +405,34 @@ export default function App() {
   const cash       = Math.max(0, capital - invested)
   const cashPct    = capital>0 ? (cash/capital)*100 : 100
   const totalEquity= capital + unrealPnL
-  const realizedPnL= journal.filter(j=>j.type==="SELL").reduce((s,j)=>s+Number(j.pnl||0),0)
-  const totalBuy   = journal.filter(j=>j.type==="BUY").length
-  const totalSell  = journal.filter(j=>j.type==="SELL").length
-  const winTrades  = journal.filter(j=>j.type==="SELL"&&Number(j.pnl||0)>0).length
+  // Karena kolom "type" tidak ada di DB, kita deteksi dari suggestions field
+  const isSellEntry = (j) => {
+    try {
+      const s = JSON.parse(j.suggestions||"[]")
+      return s.some(x=>x.msg&&x.msg.startsWith("SELL"))
+    } catch { return false }
+  }
+  const isBuyEntry = (j) => {
+    try {
+      const s = JSON.parse(j.suggestions||"[]")
+      return s.some(x=>x.msg&&x.msg.startsWith("BUY"))
+    } catch { return false }
+  }
+  const realizedPnL= journal.filter(isSellEntry).reduce((s,j)=>s+Number(j.pnl||0),0)
+  const totalBuy   = journal.filter(isBuyEntry).length
+  const totalSell  = journal.filter(isSellEntry).length
+  const winTrades  = journal.filter(j=>isSellEntry(j)&&Number(j.pnl||0)>0).length
   const tradeWinRate = totalSell>0 ? (winTrades/totalSell)*100 : 0
   const winPos     = portfolio.filter(p=>(liveCache[p.stock_code]?.price||p.close_price)>p.avg_price).length
   const posWinRate = portfolio.length>0 ? (winPos/portfolio.length)*100 : 0
   const cashStatus = cashPct<10 ? "red" : cashPct<20 ? "amber" : "green"
+
+  // Auto-load screener saat filter dipilih tapi data belum ada
+  useEffect(() => {
+    if (screenerFilter !== "Semua" && !screenerLoaded && !syncing) {
+      loadScreener()
+    }
+  }, [screenerFilter, screenerLoaded, syncing, loadScreener])
 
   // Screener filter
   const screenerList = (() => {
@@ -473,7 +517,13 @@ export default function App() {
             const raw=parseFloat(topupVal.replace(/\D/g,""))
             if (!raw||raw<100000) { notify("Minimal Rp 100.000","amber"); return }
             await supabase.from("profiles").update({ capital:raw }).eq("id",session.user.id)
-            await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"DEPOSIT",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,nominal:raw,type:"TOPUP" }])
+            await supabase.from("journal").insert([{
+              user_id:session.user.id, stock_code:"__TOPUP__",
+              date:getTodayDateString(), lot:0, shares:0,
+              avg_price:0, close_price:0,
+              pos_val:raw, cur_val:raw, pnl:0, pnl_pct:0, alloc_pct:0,
+              suggestions: JSON.stringify([{t:"blue",msg:`Top Up Rp ${raw}`}])
+            }])
             loadData(session.user.id)
           }}>Masuk ke Dashboard →</Btn>
         </div>
@@ -666,9 +716,17 @@ export default function App() {
             </div>
 
             <div style={{ display:"grid",gap:12 }}>
+              {!screenerLoaded && syncing && (
+                <div style={{ textAlign:"center",padding:"40px 20px" }}>
+                  <div style={{ display:"flex",alignItems:"center",justifyContent:"center",gap:10,color:T.amber,fontWeight:700,fontSize:14 }}>
+                    <Spinner size={20}/> Memuat data {screenerFilter==="Semua"?"IDX Populer":screenerFilter}...
+                  </div>
+                  <p style={{ marginTop:8,color:T.t3,fontSize:12 }}>Mengambil data live dari Yahoo Finance</p>
+                </div>
+              )}
               {screenerList.length===0&&screenerLoaded && (
                 <div style={{ textAlign:"center",padding:"40px 20px",color:T.t3 }}>
-                  <Filter size={32} style={{ margin:"0 auto 12px",opacity:0.5 }}/><p>Tidak ada saham sesuai filter ini.</p>
+                  <Filter size={32} style={{ margin:"0 auto 12px",opacity:0.5 }}/><p>Tidak ada saham sesuai filter ini. Coba refresh data.</p>
                 </div>
               )}
               {screenerList.map((s,i)=>(
@@ -748,12 +806,20 @@ export default function App() {
                 <div style={{ fontSize:14,fontWeight:600,color:T.t2 }}>Buku Jurnal Kosong</div>
               </div>
             ) : journal.map((row,i) => {
-              const isSell=row.type==="SELL", isTopup=row.type==="TOPUP"
+              // Detect type dari suggestions (karena kolom type tidak ada di DB)
+              let rowType = "BUY"
+              try {
+                const sg = JSON.parse(row.suggestions||"[]")
+                if (sg.some(x=>x.msg?.startsWith("SELL"))) rowType = "SELL"
+                else if (row.stock_code==="__TOPUP__") rowType = "TOPUP"
+              } catch {}
+              const isSell = rowType==="SELL"
+              const isTopup = rowType==="TOPUP"
               const typeConf = {
                 BUY:   { label:"BELI",   col:T.green, bg:T.gBg, bdr:T.gBdr, Icon:ArrowUpRight },
                 SELL:  { label:"JUAL",   col:T.red,   bg:T.rBg, bdr:T.rBdr, Icon:ArrowDownRight },
                 TOPUP: { label:"TOP UP", col:T.blue,  bg:T.lBg, bdr:T.lBdr, Icon:Plus },
-              }[row.type] || { label:row.type, col:T.t2, bg:T.bg2, bdr:T.bdr, Icon:Activity }
+              }[rowType] || { label:rowType, col:T.t2, bg:T.bg2, bdr:T.bdr, Icon:Activity }
               const { label, col, bg, bdr, Icon: RIcon } = typeConf
               return (
                 <div key={row.id} className="fu" style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:18,marginBottom:10,animationDelay:`${i*0.02}s` }}>
@@ -772,13 +838,13 @@ export default function App() {
                     <div>
                       <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isTopup?"NOMINAL":"LOT × HARGA"}</div>
                       <div style={{ fontSize:13,fontWeight:700,color:T.t1 }}>
-                        {isTopup ? `Rp ${formatRupiah(row.nominal)}` : `${row.lot} Lot @ Rp ${formatRupiah(row.close_price)}`}
+                        {isTopup ? `Rp ${formatRupiah(row.pos_val||0)}` : `${row.lot} Lot @ Rp ${formatRupiah(row.close_price)}`}
                       </div>
                     </div>
                     <div style={{ textAlign:"right" }}>
                       <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isSell?"REALIZED P&L":"TOTAL NILAI"}</div>
                       <div style={{ fontSize:15,fontWeight:900,color:isSell?getProfitColor(row.pnl,T):isTopup?T.blue:T.t1 }}>
-                        {isSell ? `${(row.pnl||0)>=0?"+":""}Rp ${formatRupiah(row.pnl||0)}` : `Rp ${formatRupiahCompact(row.nominal||(row.lot*100*row.close_price))}`}
+                        {isSell ? `${Number(row.pnl||0)>=0?"+":""}Rp ${formatRupiah(row.pnl||0)}` : `Rp ${formatRupiahCompact(row.pos_val||(row.lot*100*row.close_price))}`}
                       </div>
                     </div>
                   </div>
@@ -897,6 +963,53 @@ export default function App() {
         )}
 
         {/* ══ FORECAST ══ */}
+
+        {/* ══ FORECAST ══ */}
+        {tab==="forecast" && (
+          <div className="fu" style={{ padding:"56px 20px 20px" }}>
+            <div style={{ background:isDark?`linear-gradient(135deg,#181133 0%,${T.bg0} 100%)`:`linear-gradient(135deg,${T.bg3} 0%,${T.bg1} 100%)`,border:`1px solid ${T.lBdr}`,borderRadius:28,padding:"28px 24px",marginBottom:20 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:24 }}>
+                <div style={{ width:36,height:36,borderRadius:12,background:T.lBg,display:"flex",alignItems:"center",justifyContent:"center",border:`1px solid ${T.lBdr}` }}>
+                  <TrendingUp size={18} color={T.blue}/>
+                </div>
+                <h2 style={{ fontSize:22,fontWeight:900,color:T.t1 }}>Wealth Forecast</h2>
+              </div>
+              <Input label="TARGET DANA PENSIUN (Rp)" type="number" value={fcTarget} onChange={e=>setFcTarget(e.target.value)}/>
+              <Input label="TABUNGAN RUTIN / BULAN (Rp)" type="number" value={fcMonthly} onChange={e=>setFcMonthly(e.target.value)}/>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:16 }}>
+                <Input label="RETURN / TAHUN (%)" type="number" value={fcReturn} onChange={e=>setFcReturn(e.target.value)}/>
+                <Input label="DURASI (TAHUN)" type="number" value={fcYears} onChange={e=>setFcYears(e.target.value)}/>
+              </div>
+            </div>
+            <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:24,padding:24 }}>
+              {forecastData.hitYear ? (
+                <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,padding:20,borderRadius:16,textAlign:"center",marginBottom:24 }}>
+                  <CheckCircle size={28} color={T.green} style={{ margin:"0 auto 12px" }}/>
+                  <div style={{ fontSize:16,fontWeight:800,color:T.green }}>Target Rp {formatRupiahCompact(fcTarget)} Tercapai!</div>
+                  <div style={{ fontSize:13,color:T.green,marginTop:6,fontWeight:600 }}>Pada Tahun ke-{forecastData.hitYear}</div>
+                </div>
+              ) : (
+                <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,padding:20,borderRadius:16,textAlign:"center",marginBottom:24 }}>
+                  <Target size={28} color={T.red} style={{ margin:"0 auto 12px" }}/>
+                  <div style={{ fontSize:16,fontWeight:800,color:T.red }}>Target Tidak Terkejar dalam {fcYears} Tahun</div>
+                  <div style={{ fontSize:13,color:T.red,marginTop:6,fontWeight:600 }}>Coba naikkan DCA bulanan atau target return.</div>
+                </div>
+              )}
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                {forecastData.rows.map(row=>(
+                  <div key={row.y} style={{ background:T.bg2,padding:"14px 16px",borderRadius:14,display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${row.hit?T.gBdr:T.bdr}` }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+                      {row.hit && <CheckCircle size={14} color={T.green}/>}
+                      <span style={{ fontSize:14,fontWeight:700,color:T.t2 }}>Tahun ke-{row.y}</span>
+                    </div>
+                    <span style={{ fontSize:16,fontWeight:900,color:row.hit?T.green:T.t1 }}>Rp {formatRupiahCompact(row.bal)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab==="bandar" && (() => {
           // ── BANDAR LOGIC ─────────────────────────────────────
           // Threshold: equity >= 500jt = masuk territory bandar kecil
