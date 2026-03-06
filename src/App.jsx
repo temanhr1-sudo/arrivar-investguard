@@ -308,23 +308,20 @@ export default function App() {
   const handleTopUp = async () => {
     const amount = parseFloat(topupVal.replace(/\D/g,""))
     if (!amount||amount<100000) { notify("Minimal Rp 100.000","amber"); return }
-    const newCap = (profile.capital||0) + amount
-    const { error } = await supabase.from("profiles").update({ capital:newCap }).eq("id",session.user.id)
-    if (error) { notify("Gagal: "+error.message,"red"); return }
-    await supabase.from("journal").insert([{
-        user_id:session.user.id, stock_code:sellStock.stock_code,
-        date:getTodayDateString(), lot, shares,
-        avg_price:sellStock.avg_price, close_price:price,
-        pos_val:shares*sellStock.avg_price, cur_val:shares*price,
-        pnl:Math.round(pnl),
-        pnl_pct:sellStock.avg_price>0?Math.round(((price-sellStock.avg_price)/sellStock.avg_price)*10000)/100:0,
-        alloc_pct:capital>0?Math.round((shares*sellStock.avg_price/capital)*10000)/100:0,
-        suggestions:JSON.stringify([{t:pnl>=0?"green":"red",msg:"SELL "+lot+"lot@"+price+"|pnl:"+Math.round(pnl)}])
-      }]).then(({error:e3})=>{ if(e3) console.error("sell journal:",e3) })
-      if (sellJournalErr) { notify("Jurnal error: "+sellJournalErr.message,"red"); console.error("Journal SELL error:",sellJournalErr); return }
-      await loadData(session.user.id); setSellModal(false); setSellLot(""); setSellPrice("")
-      notify(`P&L: ${realizedPnlThisTrade>=0?"+":""}Rp ${formatRupiah(realizedPnlThisTrade)}`, realizedPnlThisTrade>=0?"green":"red")
-    } catch(e) { console.error("handleSell error:",e); notify("Gagal: "+e.message,"red") }
+    try {
+      const newCap = (profile.capital||0) + amount
+      const { error } = await supabase.from("profiles").update({ capital:newCap }).eq("id",session.user.id)
+      if (error) throw error
+      await supabase.from("journal").insert([{
+        user_id:session.user.id, stock_code:"DEPOSIT", date:getTodayDateString(), lot:0, shares:0,
+        avg_price:0, close_price:0, pos_val:amount, cur_val:0, pnl:0, pnl_pct:0, alloc_pct:0,
+        suggestions:JSON.stringify([{t:"blue",msg:"TOPUP "+amount}])
+      }])
+      setProfile(p=>({...p,capital:newCap}))
+      setTopupVal("")
+      setTopupModal(false)
+      notify("✓ Top up berhasil!","green")
+    } catch(e) { console.error("handleTopUp error:",e); notify("Gagal: "+e.message,"red") }
   }
 
   // ── Derived ──────────────────────────────────────────────
