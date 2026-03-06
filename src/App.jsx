@@ -5,7 +5,7 @@ import {
   Wallet, AlertTriangle, Target, PieChart, Trophy, Landmark,
   ShieldCheck, Info, Filter, Sun, Moon, CheckCircle,
   DollarSign, Activity, TrendingDown, BarChart, Percent,
-  RefreshCw,
+  RefreshCw, Bell, BellOff, Calendar as CalendarIcon,
 } from "lucide-react"
 import { supabase }          from "./lib/supabase"
 import { fetchBatchLiveQuotes, fetchSingleStockSearch } from "./lib/yahooApi"
@@ -127,6 +127,7 @@ const BottomNav = ({ tab, setTab }) => {
     { id:"jurnal",    label:"Jurnal",    Icon:BookOpen },
     { id:"monitor",   label:"Monitor",   Icon:BarChart2 },
     { id:"forecast",  label:"Forecast",  Icon:TrendingUp },
+    { id:"calendar",  label:"Kalender",  Icon:CalendarIcon },
   ]
   return (
     <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100,background:T.navBg,backdropFilter:"blur(20px)",borderTop:`1px solid ${T.bdr2}`,display:"flex",padding:"10px 8px calc(10px + env(safe-area-inset-bottom))" }}>
@@ -219,6 +220,20 @@ export default function App() {
   const [isLogin,   setIsLogin]   = useState(true)
   const [authLoad,  setAuthLoad]  = useState(false)
 
+  // ── Push Notification ──
+  const [pushEnabled,   setPushEnabled]   = useState(false)
+  const [pushLoading,   setPushLoading]   = useState(false)
+  const [notifLog,      setNotifLog]      = useState([])
+  const [notifBadge,    setNotifBadge]    = useState(0)
+  const [showNotifPanel,setShowNotifPanel]= useState(false)
+
+  // ── Corporate Action ──
+  const [corpActions,   setCorpActions]   = useState([])
+  const [corpLoaded,    setCorpLoaded]    = useState(false)
+  const [corpLoading,   setCorpLoading]   = useState(false)
+  const [corpFilter,    setCorpFilter]    = useState("all")  // "all" | "myPorto"
+  const [corpTypeFilter,setCorpTypeFilter]= useState("Semua")
+
   const notify = useCallback((msg, type="green") => {
     setToast({ msg, type }); setTimeout(()=>setToast(null), 3500)
   }, [])
@@ -246,51 +261,11 @@ export default function App() {
     if (j)    setJournal(j)
   }
 
-  // ── IDX Official API: fetch fundamental data ────────────
-  // Endpoint dari IDX-Scrapper: idx.co.id/umbraco/Surface/StockData/GetSecuritiesStock
-  const fetchIDXFundamental = async (codes) => {
-    const result = {}
-    try {
-      // Endpoint 1: GetSecuritiesStock — ada EPS, ListingBoard, Shares
-      const res = await fetch("/api/idx-fundamental?codes="+codes.join(","),
-        { signal: AbortSignal.timeout(10000) })
-      if (res.ok) {
-        const data = await res.json()
-        for (const item of (data?.result||[])) {
-          const c = (item.Code||item.StockCode||"").toUpperCase().trim()
-          if (c) result[c] = {
-            pe:  Number(item.PER||item.PE||0)||0,
-            pbv: Number(item.PBV||0)||0,
-            dy:  Number(item.DividendYield||0)||0,
-            roe: Number(item.ROE||0)||0,
-          }
-        }
-      }
-    } catch(e) { console.warn("IDX fundamental:", e.message) }
-    return result
-  }
-
   const loadScreener = useCallback(async () => {
     setSyncing(true)
     const data = await fetchBatchLiveQuotes(POPULAR_IDX_SYMBOLS)
-    const arr  = Object.values(data)
+    const arr = Object.values(data)
     if (arr.length > 0) {
-      // Cek apakah fundamental kosong → fetch dari IDX API
-      const noFund = arr.filter(s=>!s.pe&&!s.pbv&&!s.dy).map(s=>s.c)
-      if (noFund.length > 0) {
-        try {
-          const idxData = await fetchIDXFundamental(noFund)
-          for (const s of arr) {
-            const ix = idxData[s.c]
-            if (ix) {
-              if (!s.pe  && ix.pe)  s.pe  = ix.pe
-              if (!s.pbv && ix.pbv) s.pbv = ix.pbv
-              if (!s.dy  && ix.dy)  s.dy  = ix.dy
-              if (!s.roe && ix.roe) s.roe = ix.roe
-            }
-          }
-        } catch(e) { console.warn("IDX enrich:", e.message) }
-      }
       setScreenerData(arr)
       const dict = {}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
       setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
@@ -315,6 +290,176 @@ export default function App() {
       const id = setInterval(syncPrices, 30000); return ()=>clearInterval(id)
     }
   }, [portfolio.length, screenerLoaded, syncPrices])
+
+  // ── Push: kirim browser notification ────────────────────
+  const sendPush = useCallback((title, body, tag) => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return
+    try { new Notification(title, { body, tag, icon:"/favicon.ico", requireInteraction:false }) } catch(e){}
+    setNotifLog(prev => {
+      const n = { id:Date.now(), title, body, time:new Date().toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"}), tag }
+      return [n, ...prev.filter(x=>x.tag!==tag)].slice(0,30)
+    })
+    setNotifBadge(b => b+1)
+  }, [])
+
+  // ── Push: request permission ─────────────────────────────
+  const requestPush = useCallback(async () => {
+    if (typeof Notification === "undefined") { notify("Browser tidak support notifikasi","amber"); return }
+    setPushLoading(true)
+    const perm = await Notification.requestPermission().catch(()=>"denied")
+    setPushEnabled(perm === "granted")
+    if (perm === "granted") notify("✓ Notifikasi push aktif!","green")
+    else notify("Izin ditolak — aktifkan di pengaturan browser","amber")
+    setPushLoading(false)
+  }, [notify])
+
+  // ── Push: cek semua posisi saat harga update ─────────────
+  const checkAlerts = useCallback(() => {
+    if (!portfolio.length || !profile) return
+    const cap = Number(profile.capital)||0
+    const inv = portfolio.reduce((s,p)=>s+(p.shares*p.avg_price),0)
+    const csh = Math.max(0, cap - inv)
+
+    for (const pos of portfolio) {
+      const live = liveCache[pos.stock_code]?.price
+      if (!live) continue
+      const pnlPct   = ((live - pos.avg_price) / pos.avg_price) * 100
+      const pnlRp    = (live - pos.avg_price) * pos.shares
+      const posVal   = pos.shares * pos.avg_price
+      const allocPct = cap>0 ? (posVal/cap)*100 : 0
+      const c        = pos.stock_code
+
+      // Hitung max lot yang boleh dibeli
+      const curLoss  = pnlRp<0 ? Math.abs(pnlRp) : 0
+      const sisa11   = Math.max(0, cap*0.11 - curLoss)
+      const sisaA    = Math.max(0, cap*0.20 - posVal)
+      const maxBeli  = Math.min(sisa11/0.08, sisaA, csh)
+      const canLot   = Math.max(0, Math.floor(maxBeli/live/100))
+      const newAvg   = canLot>0 ? (posVal+canLot*100*live)/(pos.shares+canLot*100) : pos.avg_price
+
+      if (pnlPct <= -8) {
+        sendPush(
+          `⛔ STOP LOSS: ${c}`,
+          `Harga Rp${live.toLocaleString("id-ID")} sudah ${pnlPct.toFixed(1)}% dari avg Rp${pos.avg_price.toLocaleString("id-ID")}.
+
+👉 JUAL SEKARANG di harga pasar. Kerugian Rp${Math.abs(pnlRp).toLocaleString("id-ID")} — jangan tunggu lebih dalam. Buka app InvestGuard → tap "Jual".`,
+          `sl_${c}`
+        )
+      } else if (pnlPct <= -5) {
+        if (canLot > 0 && allocPct < 20) {
+          sendPush(
+            `📉 Zona Avg Down: ${c}`,
+            `Harga ${pnlPct.toFixed(1)}% — masuk zona avg down.
+
+👉 BOLEH BELI ${canLot} lot @ Rp${live.toLocaleString("id-ID")}
+Avg baru: Rp${newAvg.toFixed(0)} | Alokasi tetap aman ≤20% | Max loss ≤11% equity.
+
+Buka app → tap "Avg Down ${canLot} lot".`,
+            `ad_${c}`
+          )
+        } else {
+          sendPush(
+            `⚠️ Waspada Turun: ${c}`,
+            `Harga ${pnlPct.toFixed(1)}%. ${allocPct>=20?"Alokasi "+allocPct.toFixed(1)+"% PENUH — tidak boleh avg down.":"Batas loss 11% hampir habis."}
+
+👉 TAHAN posisi. Pantau level SL di Rp${(pos.avg_price*0.92).toLocaleString("id-ID")}. Jika tembus → wajib jual.`,
+            `warn_${c}`
+          )
+        }
+      } else if (pnlPct >= 25) {
+        sendPush(
+          `🚀 TP2 +25%: ${c}`,
+          `Profit ${pnlPct.toFixed(1)}% · Rp${pnlRp.toLocaleString("id-ID")}
+
+👉 JUAL 50–75% posisi (${Math.floor(pos.lot*0.6)} lot) untuk kunci profit maksimal. Sisakan sedikit kalau masih bullish.
+
+Buka app → tap "Jual".`,
+          `tp2_${c}`
+        )
+      } else if (pnlPct >= 15) {
+        sendPush(
+          `🎯 TP1 +15%: ${c}`,
+          `Profit ${pnlPct.toFixed(1)}% · Rp${pnlRp.toLocaleString("id-ID")}
+
+👉 JUAL 30–50% (${Math.floor(pos.lot*0.35)} lot) untuk kunci sebagian profit. Sisakan ${Math.ceil(pos.lot*0.6)} lot untuk kejar TP2 +25%.
+
+Buka app → tap "Jual".`,
+          `tp1_${c}`
+        )
+      } else if (pnlPct >= 5 && canLot > 0 && allocPct < 20) {
+        sendPush(
+          `📈 Avg Up: ${c}`,
+          `Harga +${pnlPct.toFixed(1)}% — momentum positif.
+
+👉 BOLEH tambah ${canLot} lot @ Rp${live.toLocaleString("id-ID")} untuk riding the trend.
+Avg baru: Rp${newAvg.toFixed(0)} | Alokasi tidak melebihi 20%.
+
+Buka app → tap "Tambah".`,
+          `au_${c}`
+        )
+      }
+    }
+  }, [portfolio, liveCache, profile, sendPush])
+
+  // Auto-check setiap liveCache update (jika push aktif)
+  useEffect(() => {
+    if (pushEnabled && Object.keys(liveCache).length > 0 && portfolio.length > 0) {
+      checkAlerts()
+    }
+  }, [liveCache, pushEnabled, checkAlerts])
+
+  // ── Corp Action: load dari IDX ────────────────────────────
+  const CORP_FALLBACK = [
+    { code:"BBCA", name:"Bank Central Asia",      type:"Dividen Tunai",  desc:"Rp 340/saham",                 recordDate:"2025-04-14", payDate:"2025-04-28" },
+    { code:"BBRI", name:"Bank Rakyat Indonesia",  type:"Dividen Tunai",  desc:"Rp 220/saham",                 recordDate:"2025-04-10", payDate:"2025-04-24" },
+    { code:"BMRI", name:"Bank Mandiri",            type:"Dividen Tunai",  desc:"Rp 310/saham",                 recordDate:"2025-04-07", payDate:"2025-04-21" },
+    { code:"TLKM", name:"Telkom Indonesia",        type:"Dividen Tunai",  desc:"Rp 185/saham",                 recordDate:"2025-05-02", payDate:"2025-05-16" },
+    { code:"ADRO", name:"Adaro Energy",            type:"Dividen Tunai",  desc:"Rp 480/saham",                 recordDate:"2025-03-28", payDate:"2025-04-11" },
+    { code:"PTBA", name:"Bukit Asam",              type:"Dividen Tunai",  desc:"Rp 620/saham",                 recordDate:"2025-04-18", payDate:"2025-05-02" },
+    { code:"ITMG", name:"Indo Tambangraya Megah",  type:"Dividen Tunai",  desc:"Rp 1.250/saham",               recordDate:"2025-04-22", payDate:"2025-05-06" },
+    { code:"BBNI", name:"Bank Negara Indonesia",   type:"Dividen Tunai",  desc:"Rp 192/saham",                 recordDate:"2025-05-05", payDate:"2025-05-19" },
+    { code:"ASII", name:"Astra International",     type:"Dividen Tunai",  desc:"Rp 228/saham",                 recordDate:"2025-05-12", payDate:"2025-05-26" },
+    { code:"UNVR", name:"Unilever Indonesia",      type:"Dividen Tunai",  desc:"Rp 210/saham",                 recordDate:"2025-04-30", payDate:"2025-05-14" },
+    { code:"BBNI", name:"Bank Negara Indonesia",   type:"RUPS",           desc:"Persetujuan laporan tahunan",  recordDate:"2025-05-08", payDate:"2025-05-08" },
+    { code:"BREN", name:"Barito Renewables",       type:"Stock Split",    desc:"1:5 — 1 saham jadi 5",         recordDate:"2025-04-15", payDate:"2025-04-15" },
+    { code:"AMMN", name:"Amman Mineral",           type:"Dividen Tunai",  desc:"Rp 48/saham",                  recordDate:"2025-05-20", payDate:"2025-06-03" },
+    { code:"KLBF", name:"Kalbe Farma",             type:"Stock Dividen",  desc:"5:1 — tiap 5 saham dapat 1",  recordDate:"2025-04-25", payDate:"2025-05-09" },
+    { code:"PGAS", name:"Perusahaan Gas Negara",   type:"Dividen Tunai",  desc:"Rp 158/saham",                 recordDate:"2025-05-15", payDate:"2025-05-29" },
+    { code:"INDF", name:"Indofood",                type:"Dividen Tunai",  desc:"Rp 275/saham",                 recordDate:"2025-05-21", payDate:"2025-06-04" },
+    { code:"ICBP", name:"Indofood CBP",            type:"Dividen Tunai",  desc:"Rp 185/saham",                 recordDate:"2025-05-19", payDate:"2025-06-02" },
+    { code:"SIDO", name:"Sido Muncul",             type:"Dividen Tunai",  desc:"Rp 28/saham",                  recordDate:"2025-05-07", payDate:"2025-05-21" },
+    { code:"TOWR", name:"Sarana Menara Nusantara", type:"Dividen Tunai",  desc:"Rp 32/saham",                  recordDate:"2025-06-02", payDate:"2025-06-16" },
+    { code:"CPIN", name:"Charoen Pokphand",        type:"Dividen Tunai",  desc:"Rp 55/saham",                  recordDate:"2025-05-28", payDate:"2025-06-11" },
+  ]
+
+  const loadCorpActions = useCallback(async () => {
+    setCorpLoading(true)
+    try {
+      const res = await fetch(
+        "https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=200&type=&startDate=&endDate=",
+        { headers:{"User-Agent":"Mozilla/5.0","Referer":"https://www.idx.co.id/"}, signal:AbortSignal.timeout(10000) }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const rows = (data?.data||[]).map(item=>({
+          code:       (item.EfectCode||item.StockCode||"").toUpperCase().trim(),
+          name:       item.CompanyName||item.Name||"",
+          type:       item.CorporateActionType||item.Type||"Lainnya",
+          desc:       item.Ratio||item.Description||item.Value||"",
+          recordDate: (item.RecordDate||item.CumDate||"").slice(0,10),
+          payDate:    (item.PaymentDate||item.ExDate||"").slice(0,10),
+        })).filter(r=>r.code)
+        setCorpActions(rows.length > 0 ? rows : CORP_FALLBACK)
+      } else {
+        setCorpActions(CORP_FALLBACK)
+      }
+    } catch(e) {
+      console.warn("Corp action:", e.message)
+      setCorpActions(CORP_FALLBACK)
+    }
+    setCorpLoaded(true)
+    setCorpLoading(false)
+  }, [])
 
   const handleAuth = async () => {
     if (!email||!password) { notify("Email & password wajib","amber"); return }
@@ -351,7 +496,7 @@ export default function App() {
     const newCap = (profile.capital||0) + amount
     const { error } = await supabase.from("profiles").update({ capital:newCap }).eq("id",session.user.id)
     if (error) { notify("Gagal: "+error.message,"red"); return }
-    await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"__TOPUP__",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,pos_val:amount,cur_val:amount,pnl:0,pnl_pct:0,alloc_pct:0,suggestions:JSON.stringify([{t:"blue",msg:"TopUp "+amount}]) }]).then(({error:e})=>e&&console.error("topup journal:",e))
+    await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"__TOPUP__",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,pos_val:amount,cur_val:amount,pnl:0,pnl_pct:0,alloc_pct:0,suggestions:JSON.stringify([{t:"blue",msg:"TopUp "+amount}]) }]).then(({error:e})=>e&&console.error("topup j:",e))
     await loadData(session.user.id); setTopupModal(false); setTopupVal("")
     notify(`Top up Rp ${formatRupiah(amount)} berhasil`,"green")
   }
@@ -400,17 +545,11 @@ export default function App() {
       const sAlloc=capital>0?Math.round((shares*sellStock.avg_price/capital)*10000)/100:0
       const sPnlPct=sellStock.avg_price>0?Math.round(((price-sellStock.avg_price)/sellStock.avg_price)*10000)/100:0
       const { error: sellJournalErr } = await supabase.from("journal").insert([{
-        user_id:session.user.id,
-        stock_code:sellStock.stock_code,
-        date:getTodayDateString(),
-        lot, shares,
-        avg_price:sellStock.avg_price,
-        close_price:price,
-        pos_val:shares*sellStock.avg_price,
-        cur_val:shares*price,
-        pnl:Math.round(realizedPnlThisTrade),
-        pnl_pct:sPnlPct,
-        alloc_pct:sAlloc,
+        user_id:session.user.id, stock_code:sellStock.stock_code,
+        date:getTodayDateString(), lot, shares,
+        avg_price:sellStock.avg_price, close_price:price,
+        pos_val:shares*sellStock.avg_price, cur_val:shares*price,
+        pnl:Math.round(realizedPnlThisTrade), pnl_pct:sPnlPct, alloc_pct:sAlloc,
         suggestions:JSON.stringify([{t:realizedPnlThisTrade>=0?"green":"red",msg:"SELL "+lot+"lot@"+price+"|pnl:"+Math.round(realizedPnlThisTrade)}])
       }])
       if (sellJournalErr) { notify("Jurnal error: "+sellJournalErr.message,"red"); console.error("Journal SELL error:",sellJournalErr); return }
@@ -427,7 +566,7 @@ export default function App() {
   const cash       = Math.max(0, capital - invested)
   const cashPct    = capital>0 ? (cash/capital)*100 : 100
   const totalEquity= capital + unrealPnL
-  const _jType=(j,t)=>{try{return JSON.parse(j.suggestions||"[]").some(x=>x.msg?.toUpperCase().startsWith(t.toUpperCase()))}catch{return false}}
+  const _jType=(j,t)=>{try{return JSON.parse(j.suggestions||"[]").some(x=>x.msg?.toUpperCase().startsWith(t))}catch{return false}}
   const realizedPnL= journal.filter(j=>_jType(j,"SELL")).reduce((s,j)=>s+Number(j.pnl||0),0)
   const totalBuy   = journal.filter(j=>_jType(j,"BUY")).length
   const totalSell  = journal.filter(j=>_jType(j,"SELL")).length
@@ -520,7 +659,7 @@ export default function App() {
             const raw=parseFloat(topupVal.replace(/\D/g,""))
             if (!raw||raw<100000) { notify("Minimal Rp 100.000","amber"); return }
             await supabase.from("profiles").update({ capital:raw }).eq("id",session.user.id)
-            await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"DEPOSIT",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,nominal:raw,type:"TOPUP" }])
+            await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"__TOPUP__",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,pos_val:raw,cur_val:raw,pnl:0,pnl_pct:0,alloc_pct:0,suggestions:JSON.stringify([{t:"blue",msg:"TopUp "+raw}]) }])
             loadData(session.user.id)
           }}>Masuk ke Dashboard →</Btn>
         </div>
@@ -552,7 +691,17 @@ export default function App() {
                   </div>
                 </div>
                 <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8 }}>
-                  <ThemeBtn/>
+                  <div style={{ display:"flex",gap:8 }}>
+                    <ThemeBtn/>
+                    {/* Push bell */}
+                    <button onClick={()=>{ if(!pushEnabled) requestPush(); else setShowNotifPanel(p=>!p) }}
+                      disabled={pushLoading}
+                      title={pushEnabled?"Lihat notifikasi":"Aktifkan notifikasi push"}
+                      className="tap" style={{ position:"relative",background:pushEnabled?T.lBg:T.bg2,border:`1px solid ${pushEnabled?T.lBdr:T.bdr2}`,borderRadius:12,padding:"9px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:6 }}>
+                      {pushEnabled ? <Bell size={15} color={T.blue}/> : <BellOff size={15} color={T.t3}/>}
+                      {notifBadge>0 && <span style={{ position:"absolute",top:4,right:4,width:8,height:8,borderRadius:"50%",background:T.red }}/>}
+                    </button>
+                  </div>
                   <button onClick={()=>supabase.auth.signOut()} className="tap" style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,padding:"8px 12px",borderRadius:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6 }}>
                     <LogOut size={14} color={T.t2}/><span style={{ fontSize:12,color:T.t2,fontWeight:700 }}>Keluar</span>
                   </button>
@@ -583,6 +732,49 @@ export default function App() {
               </div>
             </div>
 
+            {/* ── Notification Panel ── */}
+            {showNotifPanel && (
+              <div className="fi" style={{ background:T.bg1,border:`1px solid ${T.lBdr}`,borderRadius:20,margin:"12px 16px 0",overflow:"hidden" }}>
+                <div style={{ padding:"14px 16px 10px",borderBottom:`1px solid ${T.bdr}`,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+                    <Bell size={14} color={T.blue}/>
+                    <span style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Notifikasi ({notifLog.length})</span>
+                  </div>
+                  <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                    {notifLog.length>0 && <button onClick={()=>{setNotifLog([]);setNotifBadge(0)}} style={{ fontSize:10,fontWeight:700,color:T.t3,background:"none",border:"none",cursor:"pointer" }}>Hapus semua</button>}
+                    <button onClick={()=>setShowNotifPanel(false)} style={{ background:T.bg2,border:"none",borderRadius:8,width:26,height:26,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }} className="tap"><X size={12} color={T.t2}/></button>
+                  </div>
+                </div>
+                <div style={{ maxHeight:320,overflowY:"auto" }}>
+                  {notifLog.length===0 ? (
+                    <div style={{ padding:"24px",textAlign:"center",color:T.t3,fontSize:12 }}>Belum ada notifikasi. Harga akan dicek otomatis saat data update.</div>
+                  ) : notifLog.map(n=>{
+                    const isRed=n.tag?.startsWith("sl"), isGreen=n.tag?.startsWith("tp"), isAmber=n.tag?.startsWith("warn")
+                    const col = isRed?T.red : isGreen?T.green : isAmber?T.amber : T.blue
+                    const bg  = isRed?T.rBg : isGreen?T.gBg  : isAmber?T.aBg  : T.lBg
+                    const bdr = isRed?T.rBdr: isGreen?T.gBdr : isAmber?T.aBdr : T.lBdr
+                    return (
+                      <div key={n.id} style={{ padding:"12px 16px",borderBottom:`1px solid ${T.bdr}`,background:bg }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4 }}>
+                          <span style={{ fontSize:12,fontWeight:800,color:col }}>{n.title}</span>
+                          <span style={{ fontSize:10,color:T.t3,flexShrink:0,marginLeft:8 }}>{n.time}</span>
+                        </div>
+                        <p style={{ fontSize:11,color:col,lineHeight:1.5,whiteSpace:"pre-line",opacity:0.85 }}>{n.body}</p>
+                      </div>
+                    )
+                  })}
+                </div>
+                {!pushEnabled && (
+                  <div style={{ padding:"12px 16px",background:T.bg2,borderTop:`1px solid ${T.bdr}` }}>
+                    <button onClick={requestPush} disabled={pushLoading} style={{ width:"100%",background:T.blue,color:"#fff",border:"none",borderRadius:10,padding:"10px",fontSize:12,fontWeight:800,cursor:"pointer" }} className="tap">
+                      {pushLoading?"Mengaktifkan...":"🔔 Aktifkan Push Notification"}
+                    </button>
+                    <p style={{ fontSize:10,color:T.t3,textAlign:"center",marginTop:8 }}>Terima alert SL/TP/Avg Down/Up langsung di HP kamu</p>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ padding:"20px 20px 0" }}>
               {cashStatus!=="green" && (
                 <div className="fu" style={{ background:cashStatus==="red"?T.rBg:T.aBg,border:`1px solid ${cashStatus==="red"?T.rBdr:T.aBdr}`,borderRadius:16,padding:14,marginBottom:20,display:"flex",gap:10,alignItems:"center" }}>
@@ -610,42 +802,26 @@ export default function App() {
                 const live     = liveCache[pos.stock_code]?.price || pos.close_price || pos.avg_price
                 const posVal   = pos.shares * pos.avg_price
                 const pnlPct   = pos.avg_price>0 ? ((live-pos.avg_price)/pos.avg_price)*100 : 0
-                const pnlRp    = (live - pos.avg_price) * pos.shares
+                const pnlRp    = (live-pos.avg_price)*pos.shares
                 const allocPct = capital>0 ? (posVal/capital)*100 : 0
-                const over20   = allocPct > 20
-
-                // Level harga
-                const slPrice  = pos.avg_price * 0.92
-                const tp1Price = pos.avg_price * 1.15
-                const tp2Price = pos.avg_price * 1.25
-                const adLevel  = pos.avg_price * 0.95
-
-                // MM: berapa lot boleh ditambah
-                const maxLoss11    = capital * 0.11
-                const curLoss      = pnlRp < 0 ? Math.abs(pnlRp) : 0
-                const sisa11       = Math.max(0, maxLoss11 - curLoss)
-                const sisaAlloc    = Math.max(0, capital*0.20 - posVal)
-                const maxBeli      = Math.min(sisa11/0.08, sisaAlloc, cash)
-                const canLot       = Math.max(0, Math.floor(maxBeli/live/100))
-                const canRp        = canLot*100*live
-                const newAvg       = canLot>0 ? (posVal+canRp)/(pos.shares+canLot*100) : pos.avg_price
-                const newAlloc     = capital>0 ? ((posVal+canRp)/capital)*100 : 0
-
-                const isSL  = pnlPct<=-8, isAD=pnlPct<=-5&&pnlPct>-8
-                const isAU  = pnlPct>=5&&pnlPct<15, isTP1=pnlPct>=15, isTP2=pnlPct>=25
-
+                const over20   = allocPct>20
+                const slPrice  = pos.avg_price*0.92, tp1Price=pos.avg_price*1.15, tp2Price=pos.avg_price*1.25, adLevel=pos.avg_price*0.95
+                const curLoss  = pnlRp<0 ? Math.abs(pnlRp) : 0
+                const sisa11   = Math.max(0, capital*0.11 - curLoss)
+                const sisaA    = Math.max(0, capital*0.20 - posVal)
+                const maxBeli  = Math.min(sisa11/0.08, sisaA, cash)
+                const canLot   = Math.max(0, Math.floor(maxBeli/live/100))
+                const canRp    = canLot*100*live
+                const newAvg   = canLot>0 ? (posVal+canRp)/(pos.shares+canLot*100) : pos.avg_price
+                const newAlloc = capital>0 ? ((posVal+canRp)/capital)*100 : 0
+                const isSL=pnlPct<=-8, isAD=pnlPct<=-5&&pnlPct>-8, isAU=pnlPct>=5&&pnlPct<15, isTP1=pnlPct>=15, isTP2=pnlPct>=25
                 return (
                   <div key={pos.id} className="fu" style={{ background:T.bg1,border:`1px solid ${isSL?T.rBdr:over20?T.aBdr:T.bdr2}`,borderRadius:18,overflow:"hidden",marginBottom:12,animationDelay:`${pidx*0.04}s` }}>
-
-                    {/* Banners */}
-                    {isSL  && <div style={{ background:T.rBg,padding:"7px 14px",borderBottom:`1px solid ${T.rBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.red }}>⛔ CUT LOSS — sudah {pnlPct.toFixed(1)}%. Jual sekarang!</span></div>}
+                    {isSL && <div style={{ background:T.rBg,padding:"7px 14px",borderBottom:`1px solid ${T.rBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.red }}>⛔ CUT LOSS — sudah {pnlPct.toFixed(1)}%. Jual sekarang!</span></div>}
                     {over20&&!isSL && <div style={{ background:T.aBg,padding:"7px 14px",borderBottom:`1px solid ${T.aBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.amber }}>⚠ Overweight {allocPct.toFixed(1)}% — melebihi batas 20%</span></div>}
                     {isTP2 && <div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🚀 TP2 +25% tercapai! Pertimbangkan jual 50–75%.</span></div>}
                     {isTP1&&!isTP2 && <div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🎯 TP1 +15% tercapai! Bisa jual 30–50%.</span></div>}
-
                     <div style={{ padding:"14px 14px 0" }}>
-
-                      {/* Header */}
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
                         <div>
                           <div style={{ fontSize:16,fontWeight:900,color:T.t1 }}>{pos.stock_code}</div>
@@ -656,8 +832,6 @@ export default function App() {
                           <div style={{ fontSize:10,fontWeight:700,color:pnlPct>=0?T.green:T.red }}>{pnlRp>=0?"+":""}Rp {formatRupiahCompact(Math.abs(pnlRp))}</div>
                         </div>
                       </div>
-
-                      {/* Harga */}
                       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:12 }}>
                         {[["AVG",`Rp ${formatRupiah(pos.avg_price)}`,T.t2],["LIVE",`Rp ${formatRupiah(live)}`,T.em],["MODAL",`Rp ${formatRupiahCompact(posVal)}`,T.t3]].map(([l,v,c])=>(
                           <div key={l} style={{ background:T.bg2,borderRadius:10,padding:"8px 10px" }}>
@@ -666,8 +840,6 @@ export default function App() {
                           </div>
                         ))}
                       </div>
-
-                      {/* Alokasi */}
                       <div style={{ marginBottom:12 }}>
                         <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
                           <span style={{ fontSize:9,fontWeight:700,color:T.t3,letterSpacing:"0.5px" }}>ALOKASI EQUITY</span>
@@ -677,8 +849,6 @@ export default function App() {
                           <div style={{ height:"100%",width:`${Math.min(100,(allocPct/20)*100)}%`,background:over20?T.red:allocPct>15?T.amber:T.em,borderRadius:99,transition:"width 0.6s" }}/>
                         </div>
                       </div>
-
-                      {/* Level grid */}
                       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12 }}>
                         {[["CUT LOSS -8%","Rp "+formatRupiah(slPrice),T.red,isSL||live<=slPrice],["AVG DOWN -5%","Rp "+formatRupiah(adLevel),T.amber,live<=adLevel],["TP1 +15%","Rp "+formatRupiah(tp1Price),T.green,live>=tp1Price],["TP2 +25%","Rp "+formatRupiah(tp2Price),T.green,live>=tp2Price]].map(([lbl,val,col,hit])=>(
                           <div key={lbl} style={{ background:hit?`${col}18`:T.bg2,border:`1px solid ${hit?col+"50":T.bdr}`,borderRadius:9,padding:"6px 9px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
@@ -687,19 +857,17 @@ export default function App() {
                           </div>
                         ))}
                       </div>
-
-                      {/* MM Advisory */}
                       {isSL ? (
                         <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:12 }}>
                           <div style={{ fontSize:11,fontWeight:800,color:T.red,marginBottom:2 }}>Wajib jual sekarang</div>
-                          <div style={{ fontSize:10,color:T.red,lineHeight:1.5 }}>Loss {pnlPct.toFixed(1)}% · Kerugian Rp {formatRupiah(Math.abs(pnlRp))} · Setiap detik harga turun, kerugian makin besar.</div>
+                          <div style={{ fontSize:10,color:T.red,lineHeight:1.5 }}>Loss {pnlPct.toFixed(1)}% · Rp {formatRupiah(Math.abs(pnlRp))} · Setiap detik turun, kerugian makin besar.</div>
                         </div>
                       ) : isAD && canLot>0 && !over20 ? (
                         <div style={{ marginBottom:12 }}>
                           <div style={{ background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:7 }}>
                             <div style={{ fontSize:11,fontWeight:800,color:T.blue,marginBottom:5 }}>Bisa Average Down</div>
                             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 10px",fontSize:10 }}>
-                              {[["Maks beli",canLot+" lot (Rp "+formatRupiahCompact(canRp)+")"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Batasan","SL baru: Rp "+formatRupiah(newAvg*0.92)]].map(([l,v])=>(
+                              {[["Maks beli",canLot+" lot (Rp "+formatRupiahCompact(canRp)+")"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["SL baru","Rp "+formatRupiah(newAvg*0.92)]].map(([l,v])=>(
                                 <div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.blue }}>{v}</strong></div>
                               ))}
                             </div>
@@ -711,7 +879,7 @@ export default function App() {
                         </div>
                       ) : isAD && (canLot===0||over20) ? (
                         <div style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:10,padding:"9px 12px",marginBottom:12 }}>
-                          <div style={{ fontSize:10,fontWeight:700,color:T.amber }}>{over20?"Tidak bisa avg down — alokasi "+allocPct.toFixed(1)+"% sudah melebihi 20%":"Tidak bisa avg down — batas loss 11% equity hampir tercapai"}</div>
+                          <div style={{ fontSize:10,fontWeight:700,color:T.amber }}>{over20?"Tidak bisa avg down — alokasi "+allocPct.toFixed(1)+"% sudah >20%":"Tidak bisa avg down — batas loss 11% equity hampir tercapai"}</div>
                         </div>
                       ) : isAU && canLot>0 && !over20 ? (
                         <div style={{ marginBottom:12 }}>
@@ -733,19 +901,10 @@ export default function App() {
                           <div style={{ fontSize:10,color:T.t2 }}>Hold — tunggu level TP atau Avg.</div>
                         </div>
                       )}
-
                     </div>
-
-                    {/* Action buttons */}
                     <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderTop:`1px solid ${T.bdr}` }}>
-                      <button onClick={()=>{ setSellStock(pos); setSellModal(true) }}
-                        style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">
-                        Jual
-                      </button>
-                      <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(live)); setAddModal(true) }}
-                        style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">
-                        Tambah
-                      </button>
+                      <button onClick={()=>{ setSellStock(pos); setSellModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">Jual</button>
+                      <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(live)); setAddModal(true) }} style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Tambah</button>
                     </div>
                   </div>
                 )
@@ -1028,7 +1187,7 @@ export default function App() {
         {/* ══ FORECAST ══ */}
         {tab==="forecast" && (
           <div className="fu" style={{ padding:"56px 20px 20px" }}>
-            <div style={{ background:isDark?`linear-gradient(135deg,#181133 0%,${T.bg0} 100%)`:`linear-gradient(135deg,${T.bg3} 0%,${T.bg1} 100%)`,border:`1px solid ${T.lBdr}`,borderRadius:24,padding:"24px",marginBottom:20 }}>
+            <div style={{ background:isDark?`linear-gradient(135deg,#181133 0%,${T.bg0} 100%)`:`linear-gradient(135deg,${T.bg3} 0%,${T.bg1} 100%)`,border:`1px solid ${T.lBdr}`,borderRadius:24,padding:24,marginBottom:20 }}>
               <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:20 }}>
                 <TrendingUp size={20} color={T.blue}/>
                 <div>
@@ -1048,31 +1207,165 @@ export default function App() {
               </div>
             </div>
             <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:20 }}>
-              {forecastData.hitYear ? (
-                <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,padding:16,borderRadius:14,textAlign:"center",marginBottom:16 }}>
-                  <CheckCircle size={24} color={T.green} style={{ margin:"0 auto 8px" }}/>
-                  <div style={{ fontSize:15,fontWeight:800,color:T.green }}>Target Rp {formatRupiahCompact(Number(fcTarget))} Tercapai</div>
-                  <div style={{ fontSize:12,color:T.green,marginTop:4 }}>Tahun ke-{forecastData.hitYear} 🎉</div>
-                </div>
-              ) : (
-                <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,padding:16,borderRadius:14,textAlign:"center",marginBottom:16 }}>
-                  <Target size={24} color={T.red} style={{ margin:"0 auto 8px" }}/>
-                  <div style={{ fontSize:14,fontWeight:800,color:T.red }}>Target Tidak Tercapai dalam {fcYears} Tahun</div>
-                  <div style={{ fontSize:11,color:T.red,marginTop:4 }}>Naikkan DCA bulanan atau target return.</div>
-                </div>
-              )}
-              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
-                {forecastData.rows.map(row=>(
-                  <div key={row.y} style={{ background:T.bg2,padding:"12px 14px",borderRadius:12,display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${row.hit?T.gBdr:T.bdr}` }}>
-                    <span style={{ fontSize:13,fontWeight:700,color:T.t2 }}>Tahun ke-{row.y}</span>
-                    <div style={{ textAlign:"right" }}>
-                      <div style={{ fontSize:15,fontWeight:900,color:row.hit?T.green:T.t1 }}>Rp {formatRupiahCompact(row.bal)}</div>
-                      {row.hit && <div style={{ fontSize:9,color:T.green,fontWeight:700 }}>TARGET ✓</div>}
+              {(() => {
+                let bal=totalEquity
+                const monthly=(parseFloat(fcMonthly)||0), ar=(parseFloat(fcReturn)||10)/100
+                const mr=ar/12, total=(parseInt(fcYears)||10)*12, target=parseFloat(fcTarget)||3e9
+                const rows=[]; let hitYear=null
+                for (let m=1;m<=total;m++) {
+                  bal=(bal+monthly)*(1+mr)
+                  if (m%12===0) { const y=m/12; if(!hitYear&&bal>=target) hitYear=y; rows.push({y,bal,hit:bal>=target}) }
+                }
+                return (<>
+                  {hitYear ? (
+                    <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,padding:16,borderRadius:14,textAlign:"center",marginBottom:16 }}>
+                      <CheckCircle size={24} color={T.green} style={{ margin:"0 auto 8px" }}/>
+                      <div style={{ fontSize:15,fontWeight:800,color:T.green }}>Target Rp {formatRupiahCompact(Number(fcTarget))} Tercapai 🎉</div>
+                      <div style={{ fontSize:12,color:T.green,marginTop:4 }}>Tahun ke-{hitYear}</div>
                     </div>
+                  ) : (
+                    <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,padding:16,borderRadius:14,textAlign:"center",marginBottom:16 }}>
+                      <Target size={24} color={T.red} style={{ margin:"0 auto 8px" }}/>
+                      <div style={{ fontSize:14,fontWeight:800,color:T.red }}>Target Tidak Tercapai dalam {fcYears} Tahun</div>
+                      <div style={{ fontSize:11,color:T.red,marginTop:4 }}>Naikkan DCA bulanan atau target return.</div>
+                    </div>
+                  )}
+                  <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                    {rows.map(row=>(
+                      <div key={row.y} style={{ background:T.bg2,padding:"12px 14px",borderRadius:12,display:"flex",justifyContent:"space-between",alignItems:"center",border:`1px solid ${row.hit?T.gBdr:T.bdr}` }}>
+                        <span style={{ fontSize:13,fontWeight:700,color:T.t2 }}>Tahun ke-{row.y}</span>
+                        <div style={{ textAlign:"right" }}>
+                          <div style={{ fontSize:15,fontWeight:900,color:row.hit?T.green:T.t1 }}>Rp {formatRupiahCompact(row.bal)}</div>
+                          {row.hit && <div style={{ fontSize:9,color:T.green,fontWeight:700 }}>TARGET ✓</div>}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </>)
+              })()}
+            </div>
+          </div>
+        )}
+
+
+        {/* ══ KALENDER CORPORATE ACTION ══ */}
+        {tab==="calendar" && (
+          <div className="fu" style={{ padding:"56px 20px 20px" }}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:20 }}>
+              <div>
+                <h2 style={{ fontSize:26,fontWeight:900,color:T.t1,marginBottom:6 }}>Corporate Action</h2>
+                <p style={{ fontSize:12,color:T.t2 }}>Dividen, RUPS, Stock Split, Rights Issue</p>
+              </div>
+              <div style={{ display:"flex",gap:8,alignItems:"center",marginTop:4 }}>
+                {corpLoaded && <button onClick={()=>{setCorpLoaded(false);loadCorpActions()}} className="tap" style={{ background:T.bg2,border:`1px solid ${T.bdr2}`,borderRadius:12,padding:"9px 12px",cursor:"pointer" }}><RefreshCw size={14} color={T.t2}/></button>}
+                <ThemeBtn/>
               </div>
             </div>
+
+            {/* Filter: porto vs semua */}
+            <div style={{ display:"flex",gap:8,marginBottom:16 }}>
+              {[["all","Semua Saham"],["myPorto","Portofolioku"]].map(([v,l])=>(
+                <button key={v} onClick={()=>setCorpFilter(v)}
+                  style={{ flex:1,padding:"10px",borderRadius:14,border:`1px solid ${corpFilter===v?T.em:T.bdr2}`,background:corpFilter===v?T.em:"transparent",color:corpFilter===v?T.bg0:T.t2,fontSize:12,fontWeight:800,cursor:"pointer",transition:".2s" }}>
+                  {l}{v==="myPorto"&&` (${portfolio.length})`}
+                </button>
+              ))}
+            </div>
+
+            {/* Filter tipe */}
+            <div style={{ display:"flex",gap:7,overflowX:"auto",paddingBottom:10,marginBottom:18 }} className="hide-scrollbar">
+              {["Semua","Dividen Tunai","Stock Dividen","Stock Split","RUPS","Rights Issue","Waran"].map(t=>(
+                <button key={t} onClick={()=>setCorpTypeFilter(t)}
+                  style={{ background:corpTypeFilter===t?T.blue:T.bg1,color:corpTypeFilter===t?"#fff":T.t2,border:`1px solid ${corpTypeFilter===t?T.blue:T.bdr2}`,borderRadius:99,padding:"8px 14px",fontSize:11,fontWeight:800,whiteSpace:"nowrap",cursor:"pointer",transition:".2s",flexShrink:0 }}>
+                  {t}
+                </button>
+              ))}
+            </div>
+
+            {/* Load trigger */}
+            {!corpLoaded && !corpLoading && (
+              <div style={{ textAlign:"center",padding:"40px 20px" }}>
+                <CalendarIcon size={36} color={T.t3} style={{ margin:"0 auto 16px",opacity:0.5 }}/>
+                <p style={{ fontSize:13,color:T.t2,marginBottom:20 }}>Muat data corporate action IDX</p>
+                <Btn onClick={loadCorpActions}>Muat Data</Btn>
+              </div>
+            )}
+            {corpLoading && (
+              <div style={{ textAlign:"center",padding:"40px 20px",display:"flex",flexDirection:"column",alignItems:"center",gap:12 }}>
+                <Spinner size={28}/><p style={{ color:T.t2,fontSize:13 }}>Mengambil data dari IDX...</p>
+              </div>
+            )}
+
+            {/* List */}
+            {corpLoaded && (() => {
+              const myPCodes = portfolio.map(p=>p.stock_code)
+              let list = corpActions
+              if (corpFilter==="myPorto") list=list.filter(c=>myPCodes.includes(c.code))
+              if (corpTypeFilter!=="Semua") list=list.filter(c=>c.type?.includes(corpTypeFilter)||corpTypeFilter.includes(c.type))
+
+              const typeStyle = {
+                "Dividen Tunai": { bg:T.gBg, bdr:T.gBdr, col:T.green,  icon:"💰" },
+                "Stock Dividen": { bg:T.gBg, bdr:T.gBdr, col:T.green,  icon:"📈" },
+                "Stock Split":   { bg:T.lBg, bdr:T.lBdr, col:T.blue,   icon:"✂️" },
+                "RUPS":          { bg:T.aBg, bdr:T.aBdr, col:T.amber,  icon:"🏛" },
+                "Rights Issue":  { bg:T.lBg, bdr:T.lBdr, col:T.blue,   icon:"📋" },
+                "Waran":         { bg:T.aBg, bdr:T.aBdr, col:T.amber,  icon:"🎫" },
+              }
+              const isMyStock = (code) => myPCodes.includes(code)
+
+              return (
+                <div style={{ display:"flex",flexDirection:"column",gap:10 }}>
+                  {list.length===0 ? (
+                    <div style={{ textAlign:"center",padding:"50px 20px",color:T.t3 }}>
+                      <CalendarIcon size={32} style={{ margin:"0 auto 12px",opacity:0.5 }}/><p>{corpFilter==="myPorto"?"Tidak ada corporate action untuk saham kamu saat ini.":"Tidak ada data sesuai filter."}</p>
+                    </div>
+                  ) : list.map((item,i)=>{
+                    const ts = typeStyle[item.type] || { bg:T.bg2, bdr:T.bdr, col:T.t2, icon:"📄" }
+                    const owned = isMyStock(item.code)
+                    const today = new Date().toISOString().slice(0,10)
+                    const isPast = item.recordDate && item.recordDate < today
+                    const isNear = item.recordDate && !isPast && item.recordDate <= new Date(Date.now()+7*86400000).toISOString().slice(0,10)
+                    return (
+                      <div key={i} className="fu" style={{ background:T.bg1,border:`1px solid ${owned?T.em+"60":T.bdr2}`,borderRadius:18,overflow:"hidden",animationDelay:`${i*0.03}s`,opacity:isPast?0.6:1 }}>
+                        {owned && <div style={{ background:T.gBg,padding:"5px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:10,fontWeight:800,color:T.green }}>★ SAHAM KAMU</span></div>}
+                        {isNear && !isPast && <div style={{ background:T.aBg,padding:"5px 14px",borderBottom:`1px solid ${T.aBdr}` }}><span style={{ fontSize:10,fontWeight:800,color:T.amber }}>⏰ Dalam 7 hari!</span></div>}
+                        <div style={{ padding:"14px 16px" }}>
+                          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12 }}>
+                            <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                              <div style={{ width:40,height:40,borderRadius:10,background:T.bg2,border:`1px solid ${T.bdr}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:900,color:T.t1 }}>{item.code.slice(0,2)}</div>
+                              <div>
+                                <div style={{ fontSize:15,fontWeight:900,color:T.t1 }}>{item.code}</div>
+                                <div style={{ fontSize:11,color:T.t3,maxWidth:170,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{item.name}</div>
+                              </div>
+                            </div>
+                            <div style={{ background:ts.bg,border:`1px solid ${ts.bdr}`,borderRadius:10,padding:"5px 10px",display:"flex",alignItems:"center",gap:5 }}>
+                              <span style={{ fontSize:13 }}>{ts.icon}</span>
+                              <span style={{ fontSize:10,fontWeight:800,color:ts.col }}>{item.type}</span>
+                            </div>
+                          </div>
+                          {item.desc && (
+                            <div style={{ background:ts.bg,border:`1px solid ${ts.bdr}`,borderRadius:10,padding:"10px 12px",marginBottom:12 }}>
+                              <div style={{ fontSize:13,fontWeight:800,color:ts.col }}>{item.desc}</div>
+                            </div>
+                          )}
+                          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+                            <div style={{ background:T.bg2,borderRadius:10,padding:"8px 10px" }}>
+                              <div style={{ fontSize:9,fontWeight:700,color:T.t3,marginBottom:3 }}>RECORD DATE / CUM DATE</div>
+                              <div style={{ fontSize:12,fontWeight:800,color:isNear&&!isPast?T.amber:T.t1 }}>{item.recordDate||"—"}</div>
+                            </div>
+                            <div style={{ background:T.bg2,borderRadius:10,padding:"8px 10px" }}>
+                              <div style={{ fontSize:9,fontWeight:700,color:T.t3,marginBottom:3 }}>PAYMENT / EX DATE</div>
+                              <div style={{ fontSize:12,fontWeight:800,color:T.t1 }}>{item.payDate||"—"}</div>
+                            </div>
+                          </div>
+                          {isPast && <div style={{ marginTop:8,fontSize:10,color:T.t3,fontWeight:600,textAlign:"center" }}>✓ Sudah lewat</div>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </div>
         )}
 
