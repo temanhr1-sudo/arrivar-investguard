@@ -1,7 +1,12 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --color-brand-navy: #0F1F3D;
+  --color-brand-green: #1A6B45;
+  --color-brand-light: #F7F6F3;
+  --color-brand-border: #E8E4DE;
+}
 
 body {
-  background-color: #F7F6F3; /* Warna background default ARRIVAR */
+  background-color: var(--color-brand-light);
 }
