@@ -1,56 +1,139 @@
-// src/lib/moneyManagement.js
+/**
+ * src/lib/moneyManagement.js
+ * Inti kalkulasi risk management dan advisory system
+ */
 
-// Fungsi pembantu untuk format Rupiah
-export const idr = (n) => new Intl.NumberFormat("id-ID").format(Math.round(n));
+import { formatRupiah } from "./utils";
 
-export function calcMM(equity, avgPrice, curPrice, shares) {
-  const posVal = shares * avgPrice;
-  const curVal = shares * curPrice;
+// ─── KALKULASI MONEY MANAGEMENT ──────────────────────────
+export function calculateMoneyManagement(
+  totalEquity,
+  averageBuyPrice,
+  currentLivePrice,
+  totalSharesOwned
+) {
+  const safeEquity = Number(totalEquity) || 0;
+  const safeAvgPrice = Number(averageBuyPrice) || 0;
+  const safeLivePrice = Number(currentLivePrice) || 0;
+  const safeShares = Number(totalSharesOwned) || 0;
+
+  if (safeEquity === 0 || safeAvgPrice === 0 || safeShares === 0) {
+    return {
+      posVal: 0, curVal: 0, pnl: 0, pnlPct: 0,
+      allocPct: 0, lossEq: 0,
+      sl: 0, tp1: 0, tp2: 0, adLvl: 0, auLvl: 0,
+      canBuyLot: 0, canBuyShares: 0, projectedNewAvg: safeAvgPrice,
+    };
+  }
+
+  const posVal = safeShares * safeAvgPrice;
+  const curVal = safeShares * safeLivePrice;
   const pnl = curVal - posVal;
-  const pnlPct = ((curPrice - avgPrice) / avgPrice) * 100;
-  const allocPct = equity > 0 ? (posVal / equity) * 100 : 0;
-  const lossFromEq = equity > 0 ? (pnl / equity) * 100 : 0;
+  const pnlPct = ((safeLivePrice - safeAvgPrice) / safeAvgPrice) * 100;
+  const allocPct = (posVal / safeEquity) * 100;
+  const lossEq = (pnl / safeEquity) * 100;
 
-  // Batasan Maksimal
-  const maxLossRm = (equity * 0.11) + pnl; 
-  const maxAllocRm = (equity * 0.20) - posVal;
+  // Trading Plan levels (Risk:Reward 1:2)
+  const sl    = safeAvgPrice * 0.92;   // Cut Loss   -8%
+  const tp1   = safeAvgPrice * 1.15;   // Take Profit 1 +15%
+  const tp2   = safeAvgPrice * 1.25;   // Take Profit 2 +25%
+  const adLvl = safeAvgPrice * 0.95;   // Average Down  -5%
+  const auLvl = safeAvgPrice * 1.05;   // Average Up    +5%
 
-  // Hitung seberapa banyak boleh beli lagi (Average Down/Up)
-  const canBuyVal = Math.max(0, Math.min(
-    maxLossRm > 0 ? maxLossRm / Math.max(0.001, 1 - curPrice / avgPrice) : 0,
-    maxAllocRm
-  ));
+  // Max beli untuk Average Down
+  const maxLossAllowed = safeEquity * 0.11;
+  const currentRisk = pnl < 0 ? Math.abs(pnl) : 0;
+  const remainingRiskCapacity = maxLossAllowed - currentRisk;
+  const maxAllocationCapacity = safeEquity * 0.20 - posVal;
 
-  const canBuyLot = Math.floor(canBuyVal / curPrice / 100);
+  const buyValueBasedOnRisk =
+    remainingRiskCapacity > 0 ? remainingRiskCapacity / 0.08 : 0;
+
+  const finalBuyPowerValue = Math.max(
+    0,
+    Math.min(buyValueBasedOnRisk, maxAllocationCapacity)
+  );
+
+  const canBuyLot = Math.floor(finalBuyPowerValue / safeLivePrice / 100);
   const canBuyShares = canBuyLot * 100;
-  
-  // Proyeksi Average Price Baru
-  const newAvg = canBuyShares > 0 
-    ? ((shares * avgPrice) + (canBuyShares * curPrice)) / (shares + canBuyShares) 
-    : avgPrice;
 
-  return { posVal, curVal, pnl, pnlPct, allocPct, lossFromEq, canBuyVal, canBuyLot, canBuyShares, newAvg, maxAllocRm };
+  let projectedNewAvg = safeAvgPrice;
+  if (canBuyShares > 0) {
+    const totalCostNew = canBuyShares * safeLivePrice;
+    projectedNewAvg =
+      (posVal + totalCostNew) / (safeShares + canBuyShares);
+  }
+
+  return {
+    posVal, curVal, pnl, pnlPct, allocPct, lossEq,
+    sl, tp1, tp2, adLvl, auLvl,
+    canBuyLot, canBuyShares, projectedNewAvg,
+  };
 }
 
-// Fungsi Pembangkit Saran Otomatis
-export function autoSugg(mm, code, cashPct) {
-  const s = [];
-  if (mm.allocPct > 20) {
-    s.push({ t: "red", msg: `Alokasi ${code} ${mm.allocPct.toFixed(1)}% — melebihi batas 20%. Dilarang top up.` });
+// ─── ADVISORY SUGGESTIONS ────────────────────────────────
+export function generateAdvisorySuggestions(
+  mmData,
+  stockCode,
+  currentCashPercentage
+) {
+  const suggestions = [];
+
+  if (mmData.allocPct > 20.5) {
+    suggestions.push({
+      type: "red",
+      text: `Porsi ${stockCode} (${mmData.allocPct.toFixed(1)}%) melebihi batas 20%. DILARANG Average Down.`,
+    });
   }
-  if (mm.lossFromEq < -11) {
-    s.push({ t: "red", msg: `Loss ${code} melampaui 11% equity. Stop tambah posisi, persiapkan cut loss.` });
-  } else if (mm.pnlPct < -5 && mm.canBuyLot > 0 && cashPct > 20) {
-    s.push({ t: "amber", msg: `${code} turun. Avg down maks ${mm.canBuyLot} lot → avg baru Rp ${idr(mm.newAvg)}.` });
-  } else if (mm.pnlPct < -5 && cashPct <= 20) {
-    s.push({ t: "amber", msg: `Saham turun tapi cash tinggal ${cashPct.toFixed(0)}%. Jaga likuiditas!` });
+
+  if (mmData.lossEq < -11) {
+    suggestions.push({
+      type: "red",
+      text: `Kerugian ${stockCode} merusak >11% total ekuitas. Evaluasi fundamental segera!`,
+    });
   }
-  
-  // Skenario Take Profit (Capital Gain)
-  if (mm.pnlPct >= 35) s.push({ t: "green", msg: `${code} +${mm.pnlPct.toFixed(1)}% — TP3! Jual 30% posisi.` });
-  else if (mm.pnlPct >= 20) s.push({ t: "green", msg: `${code} +${mm.pnlPct.toFixed(1)}% — TP2. Pertimbangkan taking profit.` });
-  
-  if (!s.length) s.push({ t: "neutral", msg: `${code} masih stabil. Hold & Pantau.` });
-  
-  return s;
+
+  if (mmData.pnlPct <= -8) {
+    suggestions.push({
+      type: "red",
+      text: `Stop Loss -8% Tersentuh. Lakukan Cut Loss untuk proteksi modal.`,
+    });
+  } else if (mmData.pnlPct <= -5 && mmData.pnlPct > -8) {
+    if (
+      currentCashPercentage > 20 &&
+      mmData.allocPct < 15 &&
+      mmData.canBuyLot > 0
+    ) {
+      suggestions.push({
+        type: "blue",
+        text: `Smart Avg Down: Boleh cicil maks ${mmData.canBuyLot} lot. Estimasi avg baru: Rp ${formatRupiah(mmData.projectedNewAvg)}.`,
+      });
+    } else {
+      suggestions.push({
+        type: "amber",
+        text: `Area Average Down, tapi kas/alokasi tidak memadai. Hold posisi.`,
+      });
+    }
+  }
+
+  if (mmData.pnlPct >= 25) {
+    suggestions.push({
+      type: "green",
+      text: `🔥 Target 2 (+25%) TERCAPAI. Jual sebagian besar untuk amankan profit maksimal!`,
+    });
+  } else if (mmData.pnlPct >= 15) {
+    suggestions.push({
+      type: "green",
+      text: `🎯 Target 1 (+15%) TERCAPAI. Jual 30–50% untuk kunci keuntungan.`,
+    });
+  }
+
+  if (suggestions.length === 0) {
+    suggestions.push({
+      type: "neutral",
+      text: `${stockCode} stabil. Hold dan ikuti Trading Plan.`,
+    });
+  }
+
+  return suggestions;
 }

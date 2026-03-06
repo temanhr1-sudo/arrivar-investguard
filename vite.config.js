@@ -1,4 +1,3 @@
-// vite.config.js
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -7,9 +6,27 @@ export default defineConfig({
   server: {
     proxy: {
       '/api/yahoo': {
-        target: 'https://query1.finance.yahoo.com',
+        target: 'https://query2.finance.yahoo.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/yahoo/, ''),
+        secure: true,
+        rewrite: (path) => {
+          const chartMatch = path.match(/\/api\/yahoo\?chart=([^&]+)/)
+          if (chartMatch) return `/v8/finance/chart/${chartMatch[1]}`
+          if (path.includes('crumb=')) return '/v1/test/getcrumb'
+          return path.replace('/api/yahoo', '/v7/finance/quote')
+        },
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36')
+            proxyReq.setHeader('Accept', 'application/json, text/plain, */*')
+            proxyReq.setHeader('Accept-Language', 'en-US,en;q=0.9')
+            proxyReq.setHeader('Referer', 'https://finance.yahoo.com/')
+            proxyReq.setHeader('Origin', 'https://finance.yahoo.com')
+          })
+          proxy.on('error', (err) => {
+            console.error('[Proxy] Yahoo Finance error:', err.message)
+          })
+        }
       }
     }
   }
