@@ -122,11 +122,11 @@ const Advisory = ({ type, text }) => {
 const BottomNav = ({ tab, setTab }) => {
   const { T } = useTheme()
   const items = [
-    { id:"portfolio", label:"Portofolio", Icon:LayoutDashboard },
-    { id:"screener",  label:"Screener",   Icon:Search },
-    { id:"jurnal",    label:"Jurnal",      Icon:BookOpen },
-    { id:"monitor",   label:"Monitor",    Icon:BarChart2 },
-    { id:"forecast",  label:"Forecast",   Icon:TrendingUp },
+    { id:"portfolio", label:"Porto",     Icon:LayoutDashboard },
+    { id:"screener",  label:"Screener",  Icon:Search },
+    { id:"jurnal",    label:"Jurnal",    Icon:BookOpen },
+    { id:"monitor",   label:"Monitor",   Icon:BarChart2 },
+    { id:"forecast",  label:"Forecast",  Icon:TrendingUp },
   ]
   return (
     <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100,background:T.navBg,backdropFilter:"blur(20px)",borderTop:`1px solid ${T.bdr2}`,display:"flex",padding:"10px 8px calc(10px + env(safe-area-inset-bottom))" }}>
@@ -246,11 +246,51 @@ export default function App() {
     if (j)    setJournal(j)
   }
 
+  // ── IDX Official API: fetch fundamental data ────────────
+  // Endpoint dari IDX-Scrapper: idx.co.id/umbraco/Surface/StockData/GetSecuritiesStock
+  const fetchIDXFundamental = async (codes) => {
+    const result = {}
+    try {
+      // Endpoint 1: GetSecuritiesStock — ada EPS, ListingBoard, Shares
+      const res = await fetch("/api/idx-fundamental?codes="+codes.join(","),
+        { signal: AbortSignal.timeout(10000) })
+      if (res.ok) {
+        const data = await res.json()
+        for (const item of (data?.result||[])) {
+          const c = (item.Code||item.StockCode||"").toUpperCase().trim()
+          if (c) result[c] = {
+            pe:  Number(item.PER||item.PE||0)||0,
+            pbv: Number(item.PBV||0)||0,
+            dy:  Number(item.DividendYield||0)||0,
+            roe: Number(item.ROE||0)||0,
+          }
+        }
+      }
+    } catch(e) { console.warn("IDX fundamental:", e.message) }
+    return result
+  }
+
   const loadScreener = useCallback(async () => {
     setSyncing(true)
     const data = await fetchBatchLiveQuotes(POPULAR_IDX_SYMBOLS)
-    const arr = Object.values(data)
+    const arr  = Object.values(data)
     if (arr.length > 0) {
+      // Cek apakah fundamental kosong → fetch dari IDX API
+      const noFund = arr.filter(s=>!s.pe&&!s.pbv&&!s.dy).map(s=>s.c)
+      if (noFund.length > 0) {
+        try {
+          const idxData = await fetchIDXFundamental(noFund)
+          for (const s of arr) {
+            const ix = idxData[s.c]
+            if (ix) {
+              if (!s.pe  && ix.pe)  s.pe  = ix.pe
+              if (!s.pbv && ix.pbv) s.pbv = ix.pbv
+              if (!s.dy  && ix.dy)  s.dy  = ix.dy
+              if (!s.roe && ix.roe) s.roe = ix.roe
+            }
+          }
+        } catch(e) { console.warn("IDX enrich:", e.message) }
+      }
       setScreenerData(arr)
       const dict = {}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
       setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
@@ -308,20 +348,75 @@ export default function App() {
   const handleTopUp = async () => {
     const amount = parseFloat(topupVal.replace(/\D/g,""))
     if (!amount||amount<100000) { notify("Minimal Rp 100.000","amber"); return }
+    const newCap = (profile.capital||0) + amount
+    const { error } = await supabase.from("profiles").update({ capital:newCap }).eq("id",session.user.id)
+    if (error) { notify("Gagal: "+error.message,"red"); return }
+    await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:"__TOPUP__",date:getTodayDateString(),lot:0,shares:0,avg_price:0,close_price:0,pos_val:amount,cur_val:amount,pnl:0,pnl_pct:0,alloc_pct:0,suggestions:JSON.stringify([{t:"blue",msg:"TopUp "+amount}]) }]).then(({error:e})=>e&&console.error("topup journal:",e))
+    await loadData(session.user.id); setTopupModal(false); setTopupVal("")
+    notify(`Top up Rp ${formatRupiah(amount)} berhasil`,"green")
+  }
+
+  const handleBuy = async () => {
+    const lot=parseInt(buyLot), price=parseFloat(buyPrice)
+    if (!lot||!price) { notify("Isi lot dan harga","amber"); return }
+    const shares=lot*100, cost=shares*price
+    const invested=portfolio.reduce((s,p)=>s+(p.shares*p.avg_price),0)
+    const cash=Math.max(0,(profile?.capital||0)-invested)
+    if (cost>cash) { notify(`Cash tidak cukup! Tersedia: Rp ${formatRupiahCompact(cash)}`,"red"); return }
+    const code=addStock?.c||addStock?.stock_code
+    const exists=portfolio.find(p=>p.stock_code===code)
     try {
-      const newCap = (profile.capital||0) + amount
-      const { error } = await supabase.from("profiles").update({ capital:newCap }).eq("id",session.user.id)
-      if (error) throw error
-      await supabase.from("journal").insert([{
-        user_id:session.user.id, stock_code:"DEPOSIT", date:getTodayDateString(), lot:0, shares:0,
-        avg_price:0, close_price:0, pos_val:amount, cur_val:0, pnl:0, pnl_pct:0, alloc_pct:0,
-        suggestions:JSON.stringify([{t:"blue",msg:"TOPUP "+amount}])
+      if (exists) {
+        const ns=exists.shares+shares, na=(exists.shares*exists.avg_price+cost)/ns
+        await supabase.from("portfolio").update({ lot:exists.lot+lot,shares:ns,avg_price:na,close_price:price }).eq("id",exists.id)
+      } else {
+        await supabase.from("portfolio").insert([{ user_id:session.user.id,stock_code:code,sector:addStock?.s||"IDX",lot,shares,avg_price:price,close_price:price }])
+      }
+      const jAlloc=capital>0?Math.round((shares*price/capital)*10000)/100:0
+      const { error: journalErr } = await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,pos_val:shares*price,cur_val:shares*price,pnl:0,pnl_pct:0,alloc_pct:jAlloc,suggestions:JSON.stringify([{t:"blue",msg:"BUY "+lot+"lot@"+price}]) }])
+      if (journalErr) { notify("Jurnal error: "+journalErr.message,"red"); console.error("Journal BUY error:",journalErr); return }
+      await loadData(session.user.id); setAddModal(false); setBuyLot(""); setBuyPrice("")
+      setTab("portfolio"); notify(`✅ Beli ${code} ${lot} lot sukses!`,"green")
+    } catch(e) { console.error("handleBuy error:",e); notify("Gagal: "+e.message,"red") }
+  }
+
+  const handleSell = async () => {
+    const lot=parseInt(sellLot), price=parseFloat(sellPrice)
+    if (!lot||!price) { notify("Isi lot dan harga","amber"); return }
+    if (lot>sellStock.lot) { notify(`Maks ${sellStock.lot} lot`,"red"); return }
+    const shares=lot*100
+    const realizedPnlThisTrade = (price - sellStock.avg_price) * shares
+    const nominal = shares * price
+    const remaining = sellStock.shares - shares
+    // Capital model: capital = total injeksi. Cash = capital - invested.
+    // Saat jual, invested berkurang (portfolio berkurang), cash otomatis naik.
+    // Kalau rugi, kita perlu kurangi capital sebesar kerugian agar total equity benar.
+    // Cara paling clean: capital += pnl (positif = tambah, negatif = kurangi)
+    const newCapital = (profile.capital||0) + realizedPnlThisTrade
+    try {
+      await supabase.from("profiles").update({ capital: newCapital }).eq("id",session.user.id)
+      if (remaining===0) await supabase.from("portfolio").delete().eq("id",sellStock.id)
+      else await supabase.from("portfolio").update({ lot:sellStock.lot-lot,shares:remaining,close_price:price }).eq("id",sellStock.id)
+      const sAlloc=capital>0?Math.round((shares*sellStock.avg_price/capital)*10000)/100:0
+      const sPnlPct=sellStock.avg_price>0?Math.round(((price-sellStock.avg_price)/sellStock.avg_price)*10000)/100:0
+      const { error: sellJournalErr } = await supabase.from("journal").insert([{
+        user_id:session.user.id,
+        stock_code:sellStock.stock_code,
+        date:getTodayDateString(),
+        lot, shares,
+        avg_price:sellStock.avg_price,
+        close_price:price,
+        pos_val:shares*sellStock.avg_price,
+        cur_val:shares*price,
+        pnl:Math.round(realizedPnlThisTrade),
+        pnl_pct:sPnlPct,
+        alloc_pct:sAlloc,
+        suggestions:JSON.stringify([{t:realizedPnlThisTrade>=0?"green":"red",msg:"SELL "+lot+"lot@"+price+"|pnl:"+Math.round(realizedPnlThisTrade)}])
       }])
-      setProfile(p=>({...p,capital:newCap}))
-      setTopupVal("")
-      setTopupModal(false)
-      notify("✓ Top up berhasil!","green")
-    } catch(e) { console.error("handleTopUp error:",e); notify("Gagal: "+e.message,"red") }
+      if (sellJournalErr) { notify("Jurnal error: "+sellJournalErr.message,"red"); console.error("Journal SELL error:",sellJournalErr); return }
+      await loadData(session.user.id); setSellModal(false); setSellLot(""); setSellPrice("")
+      notify(`P&L: ${realizedPnlThisTrade>=0?"+":""}Rp ${formatRupiah(realizedPnlThisTrade)}`, realizedPnlThisTrade>=0?"green":"red")
+    } catch(e) { console.error("handleSell error:",e); notify("Gagal: "+e.message,"red") }
   }
 
   // ── Derived ──────────────────────────────────────────────
@@ -332,7 +427,7 @@ export default function App() {
   const cash       = Math.max(0, capital - invested)
   const cashPct    = capital>0 ? (cash/capital)*100 : 100
   const totalEquity= capital + unrealPnL
-  const _jType=(j,t)=>{try{return JSON.parse(j.suggestions||"[]").some(x=>x.msg?.startsWith(t))}catch{return false}}
+  const _jType=(j,t)=>{try{return JSON.parse(j.suggestions||"[]").some(x=>x.msg?.toUpperCase().startsWith(t.toUpperCase()))}catch{return false}}
   const realizedPnL= journal.filter(j=>_jType(j,"SELL")).reduce((s,j)=>s+Number(j.pnl||0),0)
   const totalBuy   = journal.filter(j=>_jType(j,"BUY")).length
   const totalSell  = journal.filter(j=>_jType(j,"SELL")).length
@@ -342,9 +437,6 @@ export default function App() {
   const posWinRate = portfolio.length>0 ? (winPos/portfolio.length)*100 : 0
   const cashStatus = cashPct<10 ? "red" : cashPct<20 ? "amber" : "green"
 
-  // Screener: autoload saat filter dipilih
-  useEffect(()=>{ if(tab==="screener"&&screenerFilter!=="Semua"&&!screenerLoaded&&!syncing) loadScreener() },[tab,screenerFilter,screenerLoaded,syncing,loadScreener])
-
   // Screener filter
   const screenerList = (() => {
     let list=[...screenerData]
@@ -352,10 +444,10 @@ export default function App() {
       const q=screenerQ.toUpperCase()
       list=list.filter(s=>s.c.includes(q)||s.n.toUpperCase().includes(q))
     }
-    if (screenerFilter==="Dividen") list=list.filter(s=>Number(s.dy)>0&&Number(s.dy)>=5).sort((a,b)=>b.dy-a.dy)
+    if (screenerFilter==="Dividen") list=list.filter(s=>Number(s.dy)>=5).sort((a,b)=>Number(b.dy)-Number(a.dy))
     else if (screenerFilter==="PBV") list=list.filter(s=>Number(s.pbv)>0&&Number(s.pbv)<1.5).sort((a,b)=>Number(a.pbv)-Number(b.pbv))
     else if (screenerFilter==="PE")  list=list.filter(s=>Number(s.pe)>0&&Number(s.pe)<15).sort((a,b)=>Number(a.pe)-Number(b.pe))
-    else if (screenerFilter==="ROE") list=list.filter(s=>Number(s.roe)>0&&Number(s.roe)>15).sort((a,b)=>b.roe-a.roe)
+    else if (screenerFilter==="ROE") list=list.filter(s=>Number(s.roe)>15).sort((a,b)=>Number(b.roe)-Number(a.roe))
     return list.slice(0,40)
   })()
 
@@ -517,10 +609,9 @@ export default function App() {
               ) : portfolio.map((pos,pidx) => {
                 const live     = liveCache[pos.stock_code]?.price || pos.close_price || pos.avg_price
                 const posVal   = pos.shares * pos.avg_price
-                const curVal   = pos.shares * live
-                const pnlRp    = curVal - posVal
-                const pnlPct   = pos.avg_price > 0 ? ((live - pos.avg_price) / pos.avg_price) * 100 : 0
-                const allocPct = capital > 0 ? (posVal / capital) * 100 : 0
+                const pnlPct   = pos.avg_price>0 ? ((live-pos.avg_price)/pos.avg_price)*100 : 0
+                const pnlRp    = (live - pos.avg_price) * pos.shares
+                const allocPct = capital>0 ? (posVal/capital)*100 : 0
                 const over20   = allocPct > 20
 
                 // Level harga
@@ -529,150 +620,130 @@ export default function App() {
                 const tp2Price = pos.avg_price * 1.25
                 const adLevel  = pos.avg_price * 0.95
 
-                // Money management: berapa max tambah posisi
-                const maxLossTotal  = capital * 0.11       // batas loss 11% equity
-                const curLoss       = pnlRp < 0 ? Math.abs(pnlRp) : 0
-                const sisa11        = Math.max(0, maxLossTotal - curLoss)
-                const sisaAlokasi   = Math.max(0, capital * 0.20 - posVal)
-                const maxBeliBySL   = sisa11 / 0.08        // jika beli X & harga turun ke SL, total loss ≤ 11%
-                const maxBeli       = Math.min(maxBeliBySL, sisaAlokasi, cash)
-                const canLot        = Math.max(0, Math.floor(maxBeli / live / 100))
-                const canShares     = canLot * 100
-                const canRp         = canShares * live
-                const newAvg        = canShares > 0 ? (posVal + canRp) / (pos.shares + canShares) : pos.avg_price
-                const newAlloc      = capital > 0 ? ((posVal + canRp) / capital) * 100 : 0
+                // MM: berapa lot boleh ditambah
+                const maxLoss11    = capital * 0.11
+                const curLoss      = pnlRp < 0 ? Math.abs(pnlRp) : 0
+                const sisa11       = Math.max(0, maxLoss11 - curLoss)
+                const sisaAlloc    = Math.max(0, capital*0.20 - posVal)
+                const maxBeli      = Math.min(sisa11/0.08, sisaAlloc, cash)
+                const canLot       = Math.max(0, Math.floor(maxBeli/live/100))
+                const canRp        = canLot*100*live
+                const newAvg       = canLot>0 ? (posVal+canRp)/(pos.shares+canLot*100) : pos.avg_price
+                const newAlloc     = capital>0 ? ((posVal+canRp)/capital)*100 : 0
 
-                // Status card
-                const isStopLoss  = pnlPct <= -8
-                const isAvgZone   = pnlPct <= -5 && pnlPct > -8
-                const isAvgUpZone = pnlPct >= 5
-                const isTP1       = pnlPct >= 15
-                const isTP2       = pnlPct >= 25
-                const cardBorder  = isStopLoss ? T.rBdr : over20 ? T.aBdr : T.bdr2
+                const isSL  = pnlPct<=-8, isAD=pnlPct<=-5&&pnlPct>-8
+                const isAU  = pnlPct>=5&&pnlPct<15, isTP1=pnlPct>=15, isTP2=pnlPct>=25
 
                 return (
-                  <div key={pos.id} className="fu" style={{ background:T.bg1,border:`1px solid ${cardBorder}`,borderRadius:20,overflow:"hidden",marginBottom:12,animationDelay:`${pidx*0.04}s` }}>
+                  <div key={pos.id} className="fu" style={{ background:T.bg1,border:`1px solid ${isSL?T.rBdr:over20?T.aBdr:T.bdr2}`,borderRadius:18,overflow:"hidden",marginBottom:12,animationDelay:`${pidx*0.04}s` }}>
 
-                    {/* ── Warning banner ── */}
-                    {isStopLoss && <div style={{ background:T.rBg,padding:"8px 16px",display:"flex",gap:8,alignItems:"center",borderBottom:`1px solid ${T.rBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.red }}>⛔ CUT LOSS — sudah -8%. Jual sekarang!</span></div>}
-                    {over20 && !isStopLoss && <div style={{ background:T.aBg,padding:"8px 16px",display:"flex",gap:8,alignItems:"center",borderBottom:`1px solid ${T.aBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.amber }}>⚠ Overweight {allocPct.toFixed(1)}% — melebihi batas 20% equity</span></div>}
+                    {/* Banners */}
+                    {isSL  && <div style={{ background:T.rBg,padding:"7px 14px",borderBottom:`1px solid ${T.rBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.red }}>⛔ CUT LOSS — sudah {pnlPct.toFixed(1)}%. Jual sekarang!</span></div>}
+                    {over20&&!isSL && <div style={{ background:T.aBg,padding:"7px 14px",borderBottom:`1px solid ${T.aBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.amber }}>⚠ Overweight {allocPct.toFixed(1)}% — melebihi batas 20%</span></div>}
+                    {isTP2 && <div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🚀 TP2 +25% tercapai! Pertimbangkan jual 50–75%.</span></div>}
+                    {isTP1&&!isTP2 && <div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🎯 TP1 +15% tercapai! Bisa jual 30–50%.</span></div>}
 
-                    <div style={{ padding:"16px 16px 0" }}>
+                    <div style={{ padding:"14px 14px 0" }}>
 
-                      {/* ── Header: nama + PnL ── */}
-                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
+                      {/* Header */}
+                      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
                         <div>
-                          <div style={{ fontSize:17,fontWeight:900,color:T.t1,letterSpacing:"-0.3px" }}>{pos.stock_code}</div>
-                          <div style={{ fontSize:11,color:T.t3,marginTop:2 }}>{pos.lot} lot · {pos.sector}</div>
+                          <div style={{ fontSize:16,fontWeight:900,color:T.t1 }}>{pos.stock_code}</div>
+                          <div style={{ fontSize:10,color:T.t3,marginTop:1 }}>{pos.lot} lot · {pos.sector}</div>
                         </div>
                         <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:20,fontWeight:900,color:pnlPct>=0?T.green:T.red,letterSpacing:"-0.5px" }}>{formatPercent(pnlPct)}</div>
-                          <div style={{ fontSize:11,fontWeight:700,color:pnlPct>=0?T.green:T.red }}>{pnlRp>=0?"+":""}Rp {formatRupiahCompact(Math.abs(pnlRp))}</div>
+                          <div style={{ fontSize:20,fontWeight:900,color:pnlPct>=0?T.green:T.red }}>{formatPercent(pnlPct)}</div>
+                          <div style={{ fontSize:10,fontWeight:700,color:pnlPct>=0?T.green:T.red }}>{pnlRp>=0?"+":""}Rp {formatRupiahCompact(Math.abs(pnlRp))}</div>
                         </div>
                       </div>
 
-                      {/* ── Harga row ── */}
-                      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:12 }}>
-                        {[["Avg Beli","Rp "+formatRupiah(pos.avg_price),T.t2],["Live","Rp "+formatRupiah(live),T.em],["Modal","Rp "+formatRupiahCompact(posVal),T.t3]].map(([l,v,c])=>(
+                      {/* Harga */}
+                      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:12 }}>
+                        {[["AVG",`Rp ${formatRupiah(pos.avg_price)}`,T.t2],["LIVE",`Rp ${formatRupiah(live)}`,T.em],["MODAL",`Rp ${formatRupiahCompact(posVal)}`,T.t3]].map(([l,v,c])=>(
                           <div key={l} style={{ background:T.bg2,borderRadius:10,padding:"8px 10px" }}>
-                            <div style={{ fontSize:9,color:T.t3,fontWeight:700,marginBottom:2 }}>{l.toUpperCase()}</div>
+                            <div style={{ fontSize:9,color:T.t3,fontWeight:700,marginBottom:2 }}>{l}</div>
                             <div style={{ fontSize:11,fontWeight:800,color:c }}>{v}</div>
                           </div>
                         ))}
                       </div>
 
-                      {/* ── Alokasi bar ── */}
-                      <div style={{ marginBottom:14 }}>
-                        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:5 }}>
-                          <span style={{ fontSize:10,fontWeight:700,color:T.t3 }}>ALOKASI EQUITY</span>
+                      {/* Alokasi */}
+                      <div style={{ marginBottom:12 }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
+                          <span style={{ fontSize:9,fontWeight:700,color:T.t3,letterSpacing:"0.5px" }}>ALOKASI EQUITY</span>
                           <span style={{ fontSize:11,fontWeight:900,color:over20?T.red:allocPct>15?T.amber:T.green }}>{allocPct.toFixed(1)}<span style={{ fontWeight:500,color:T.t3 }}>% / 20%</span></span>
                         </div>
-                        <div style={{ height:5,background:T.bg0,borderRadius:99,overflow:"hidden" }}>
-                          <div style={{ height:"100%",width:`${Math.min(100,(allocPct/20)*100)}%`,background:over20?T.red:allocPct>15?T.amber:T.em,borderRadius:99,transition:"width 0.6s ease" }}/>
+                        <div style={{ height:4,background:T.bg0,borderRadius:99,overflow:"hidden" }}>
+                          <div style={{ height:"100%",width:`${Math.min(100,(allocPct/20)*100)}%`,background:over20?T.red:allocPct>15?T.amber:T.em,borderRadius:99,transition:"width 0.6s" }}/>
                         </div>
                       </div>
 
-                      {/* ── Level trading plan ── */}
+                      {/* Level grid */}
                       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12 }}>
-                        {[
-                          ["CUT LOSS",    "Rp "+formatRupiah(slPrice),  T.red,   live<=slPrice],
-                          ["AVG DOWN",    "Rp "+formatRupiah(adLevel),  T.amber, live<=adLevel],
-                          ["TP1 +15%",   "Rp "+formatRupiah(tp1Price), T.green, live>=tp1Price],
-                          ["TP2 +25%",   "Rp "+formatRupiah(tp2Price), T.green, live>=tp2Price],
-                        ].map(([lbl,val,col,hit])=>(
-                          <div key={lbl} style={{ background:hit?`${col}18`:T.bg2,border:`1px solid ${hit?col+"40":T.bdr}`,borderRadius:10,padding:"7px 10px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                            <span style={{ fontSize:9,fontWeight:800,color:hit?col:T.t3,letterSpacing:"0.3px" }}>{lbl}</span>
-                            <span style={{ fontSize:11,fontWeight:900,color:hit?col:T.t2 }}>{val}</span>
+                        {[["CUT LOSS -8%","Rp "+formatRupiah(slPrice),T.red,isSL||live<=slPrice],["AVG DOWN -5%","Rp "+formatRupiah(adLevel),T.amber,live<=adLevel],["TP1 +15%","Rp "+formatRupiah(tp1Price),T.green,live>=tp1Price],["TP2 +25%","Rp "+formatRupiah(tp2Price),T.green,live>=tp2Price]].map(([lbl,val,col,hit])=>(
+                          <div key={lbl} style={{ background:hit?`${col}18`:T.bg2,border:`1px solid ${hit?col+"50":T.bdr}`,borderRadius:9,padding:"6px 9px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                            <span style={{ fontSize:8,fontWeight:800,color:hit?col:T.t3,letterSpacing:"0.3px" }}>{lbl}</span>
+                            <span style={{ fontSize:10,fontWeight:900,color:hit?col:T.t2 }}>{val}</span>
                           </div>
                         ))}
                       </div>
 
-                      {/* ── MM Advisory ── */}
-                      {isStopLoss ? (
-                        <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:14 }}>
-                          <div style={{ fontSize:12,fontWeight:800,color:T.red,marginBottom:3 }}>Wajib Cut Loss</div>
-                          <div style={{ fontSize:11,color:T.red,lineHeight:1.5 }}>Loss sudah {pnlPct.toFixed(1)}% · Kerugian Rp {formatRupiah(Math.abs(pnlRp))} · Jual segera untuk lindungi modal.</div>
+                      {/* MM Advisory */}
+                      {isSL ? (
+                        <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:12 }}>
+                          <div style={{ fontSize:11,fontWeight:800,color:T.red,marginBottom:2 }}>Wajib jual sekarang</div>
+                          <div style={{ fontSize:10,color:T.red,lineHeight:1.5 }}>Loss {pnlPct.toFixed(1)}% · Kerugian Rp {formatRupiah(Math.abs(pnlRp))} · Setiap detik harga turun, kerugian makin besar.</div>
                         </div>
-                      ) : isTP2 ? (
-                        <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:14 }}>
-                          <div style={{ fontSize:12,fontWeight:800,color:T.green,marginBottom:3 }}>TP2 +25% Tercapai 🚀</div>
-                          <div style={{ fontSize:11,color:T.green }}>Jual 50–75% posisi untuk kunci profit maksimal.</div>
-                        </div>
-                      ) : isTP1 ? (
-                        <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:14 }}>
-                          <div style={{ fontSize:12,fontWeight:800,color:T.green,marginBottom:3 }}>TP1 +15% Tercapai 🎯</div>
-                          <div style={{ fontSize:11,color:T.green }}>Jual 30–50% untuk amankan profit. Sisakan kejar TP2.</div>
-                        </div>
-                      ) : isAvgZone && canLot > 0 && !over20 ? (
-                        <div style={{ marginBottom:14 }}>
-                          <div style={{ background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:8 }}>
-                            <div style={{ fontSize:12,fontWeight:800,color:T.blue,marginBottom:6 }}>Boleh Average Down</div>
-                            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",fontSize:10 }}>
-                              {[["Maks beli",canLot+" lot"],["Biaya","Rp "+formatRupiahCompact(canRp)],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"]].map(([l,v])=>(
-                                <div key={l}><span style={{ color:T.t3 }}>{l} </span><strong style={{ color:T.blue }}>{v}</strong></div>
+                      ) : isAD && canLot>0 && !over20 ? (
+                        <div style={{ marginBottom:12 }}>
+                          <div style={{ background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:7 }}>
+                            <div style={{ fontSize:11,fontWeight:800,color:T.blue,marginBottom:5 }}>Bisa Average Down</div>
+                            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 10px",fontSize:10 }}>
+                              {[["Maks beli",canLot+" lot (Rp "+formatRupiahCompact(canRp)+")"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Batasan","SL baru: Rp "+formatRupiah(newAvg*0.92)]].map(([l,v])=>(
+                                <div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.blue }}>{v}</strong></div>
                               ))}
                             </div>
                           </div>
                           <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(live)); setAddModal(true) }}
-                            style={{ width:"100%",background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:10,padding:"9px",fontSize:11,fontWeight:800,color:T.blue,cursor:"pointer" }} className="tap">
+                            style={{ width:"100%",background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.blue,cursor:"pointer" }} className="tap">
                             Avg Down {canLot} lot @ Rp {formatRupiah(live)}
                           </button>
                         </div>
-                      ) : isAvgZone && (canLot===0 || over20) ? (
-                        <div style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:14 }}>
-                          <div style={{ fontSize:11,fontWeight:700,color:T.amber }}>{over20?"Tidak bisa avg down — alokasi sudah "+allocPct.toFixed(1)+"% (maks 20%)":"Tidak bisa avg down — batas loss 11% hampir tercapai. Hold."}</div>
+                      ) : isAD && (canLot===0||over20) ? (
+                        <div style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:10,padding:"9px 12px",marginBottom:12 }}>
+                          <div style={{ fontSize:10,fontWeight:700,color:T.amber }}>{over20?"Tidak bisa avg down — alokasi "+allocPct.toFixed(1)+"% sudah melebihi 20%":"Tidak bisa avg down — batas loss 11% equity hampir tercapai"}</div>
                         </div>
-                      ) : isAvgUpZone && canLot > 0 && !over20 ? (
-                        <div style={{ marginBottom:14 }}>
-                          <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:8 }}>
-                            <div style={{ fontSize:12,fontWeight:800,color:T.green,marginBottom:6 }}>Boleh Average Up (+5%)</div>
-                            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",fontSize:10 }}>
+                      ) : isAU && canLot>0 && !over20 ? (
+                        <div style={{ marginBottom:12 }}>
+                          <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:7 }}>
+                            <div style={{ fontSize:11,fontWeight:800,color:T.green,marginBottom:5 }}>Bisa Average Up (+5%)</div>
+                            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 10px",fontSize:10 }}>
                               {[["Maks beli",canLot+" lot"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Biaya","Rp "+formatRupiahCompact(canRp)]].map(([l,v])=>(
-                                <div key={l}><span style={{ color:T.t3 }}>{l} </span><strong style={{ color:T.green }}>{v}</strong></div>
+                                <div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.green }}>{v}</strong></div>
                               ))}
                             </div>
                           </div>
                           <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(live)); setAddModal(true) }}
-                            style={{ width:"100%",background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:10,padding:"9px",fontSize:11,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">
+                            style={{ width:"100%",background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">
                             Avg Up {canLot} lot @ Rp {formatRupiah(live)}
                           </button>
                         </div>
                       ) : (
-                        <div style={{ background:T.bg2,borderRadius:10,padding:"8px 12px",marginBottom:14 }}>
-                          <div style={{ fontSize:11,color:T.t2 }}>Hold — tunggu level TP atau Avg Down/Up.</div>
+                        <div style={{ background:T.bg2,borderRadius:9,padding:"8px 12px",marginBottom:12 }}>
+                          <div style={{ fontSize:10,color:T.t2 }}>Hold — tunggu level TP atau Avg.</div>
                         </div>
                       )}
 
                     </div>
 
-                    {/* ── Action buttons ── */}
+                    {/* Action buttons */}
                     <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderTop:`1px solid ${T.bdr}` }}>
                       <button onClick={()=>{ setSellStock(pos); setSellModal(true) }}
-                        style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"12px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">
+                        style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">
                         Jual
                       </button>
                       <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(live)); setAddModal(true) }}
-                        style={{ background:"transparent",border:"none",padding:"12px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">
+                        style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">
                         Tambah
                       </button>
                     </div>
@@ -802,7 +873,7 @@ export default function App() {
               </div>
             ) : journal.map((row,i) => {
               const _sg=()=>{try{return JSON.parse(row.suggestions||"[]")}catch{return[]}}
-              const _msg=_sg().map(x=>x.msg||"").join("|")
+              const _msg=_sg().map(x=>x.msg||"").join("|").toUpperCase()
               const rowType=row.stock_code==="__TOPUP__"?"TOPUP":_msg.startsWith("SELL")?"SELL":"BUY"
               const isSell=rowType==="SELL", isTopup=rowType==="TOPUP"
               const typeConf = {
@@ -971,7 +1042,7 @@ export default function App() {
                 <Input label="RETURN / TAHUN (%)" type="number" value={fcReturn} onChange={e=>setFcReturn(e.target.value)} placeholder="15"/>
                 <Input label="DURASI (TAHUN)" type="number" value={fcYears} onChange={e=>setFcYears(e.target.value)} placeholder="10"/>
               </div>
-              <div style={{ background:T.bg2,borderRadius:12,padding:"12px 14px" }}>
+              <div style={{ background:T.bg2,borderRadius:12,padding:"12px 14px",marginTop:4 }}>
                 <div style={{ fontSize:9,color:T.t3,fontWeight:700,marginBottom:4 }}>MODAL AWAL (EQUITY SAAT INI)</div>
                 <div style={{ fontSize:18,fontWeight:900,color:T.em }}>Rp {formatRupiah(totalEquity)}</div>
               </div>
@@ -981,13 +1052,13 @@ export default function App() {
                 <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,padding:16,borderRadius:14,textAlign:"center",marginBottom:16 }}>
                   <CheckCircle size={24} color={T.green} style={{ margin:"0 auto 8px" }}/>
                   <div style={{ fontSize:15,fontWeight:800,color:T.green }}>Target Rp {formatRupiahCompact(Number(fcTarget))} Tercapai</div>
-                  <div style={{ fontSize:12,color:T.green,marginTop:4 }}>Tahun ke-{forecastData.hitYear}</div>
+                  <div style={{ fontSize:12,color:T.green,marginTop:4 }}>Tahun ke-{forecastData.hitYear} 🎉</div>
                 </div>
               ) : (
                 <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,padding:16,borderRadius:14,textAlign:"center",marginBottom:16 }}>
                   <Target size={24} color={T.red} style={{ margin:"0 auto 8px" }}/>
-                  <div style={{ fontSize:15,fontWeight:800,color:T.red }}>Target Tidak Tercapai dalam {fcYears} Tahun</div>
-                  <div style={{ fontSize:12,color:T.red,marginTop:4 }}>Naikkan DCA bulanan atau target return.</div>
+                  <div style={{ fontSize:14,fontWeight:800,color:T.red }}>Target Tidak Tercapai dalam {fcYears} Tahun</div>
+                  <div style={{ fontSize:11,color:T.red,marginTop:4 }}>Naikkan DCA bulanan atau target return.</div>
                 </div>
               )}
               <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
