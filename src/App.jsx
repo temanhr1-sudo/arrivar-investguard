@@ -274,76 +274,64 @@ export default function App() {
     if (j)    setJournal(j)
   }
 
-  // ── IDX: Fetch ALL emiten (all ~900 stocks) ──────────────
-  const loadAllEmiten = useCallback(async () => {
-    try {
-      const res = await fetch(
-        "https://idx.co.id/umbraco/Surface/StockData/GetSecuritiesStock?code=&sector=&board=&start=0&length=800",
-        { headers:{"User-Agent":"Mozilla/5.0","Referer":"https://www.idx.co.id/"}, signal:AbortSignal.timeout(12000) }
-      )
-      if (res.ok) {
-        const data = await res.json()
-        const list = (data?.data||[]).map(item=>({ code:(item.Code||"").toUpperCase(), name:item.Name||"" })).filter(x=>x.code)
-        if (list.length>0) { setAllEmiten(list); setEmitenLoaded(true); return list }
-      }
-    } catch(e) { console.warn("loadAllEmiten:", e.message) }
-    return []
-  }, [])
-
-  // ── Screener: upgrade to use all IDX stocks ───────────────
-  const loadAllIDXScreener = useCallback(async () => {
-    setSyncing(true)
-    // Step 1: get all emiten list from IDX
-    let emitenList = allEmiten
-    if (!emitenLoaded) { emitenList = await loadAllEmiten() }
-    // Step 2: fetch prices via Yahoo for all codes in batches
-    // Yahoo can handle ~50 codes at a time via existing fetchBatchLiveQuotes
-    const allCodes = emitenList.map(e=>e.code)
-    const nameMap  = {}; emitenList.forEach(e=>{ nameMap[e.code]=e.name })
-    // Batch: 50 per call
-    const BATCH = 50
-    const allResults = {}
-    for (let i=0; i<Math.min(allCodes.length, 300); i+=BATCH) {  // cap at 300 for perf
-      const batch = allCodes.slice(i, i+BATCH)
-      try {
-        const res = await fetchBatchLiveQuotes(batch)
-        Object.assign(allResults, res)
-      } catch(e) { console.warn("batch screener:", e) }
-      if (i+BATCH < allCodes.length) await new Promise(r=>setTimeout(r,200))
-    }
-    // Enrich names from IDX list
-    for (const code of Object.keys(allResults)) {
-      if (nameMap[code] && !allResults[code].n) allResults[code].n = nameMap[code]
-    }
-    const arr = Object.values(allResults)
-    if (arr.length > 0) {
-      setScreenerData(arr)
-      const dict={}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
-      setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
-      notify(`✓ ${arr.length} saham IDX dimuat`,"green")
-    } else { notify("Gagal memuat data pasar","red") }
-    setSyncing(false)
-  }, [allEmiten, emitenLoaded, loadAllEmiten, notify])
-
-  // ref to avoid circular dep: loadScreener <-> loadAllIDXScreener
-  const loadAllIDXScreenerRef = React.useRef(null)
-
+  // ── Screener: load 958 stocks from static JSON ───────────
+  // File: /public/idx_stocks.json — diupdate harian via script
+  // Run: node scripts/update-idx-data.js  (atau upload Excel baru)
   const loadScreener = useCallback(async () => {
     setSyncing(true)
-    const data = await fetchBatchLiveQuotes(POPULAR_IDX_SYMBOLS)
-    const arr = Object.values(data)
-    if (arr.length > 0) {
-      setScreenerData(arr)
-      const dict = {}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
-      setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
-      notify(`✓ ${arr.length} saham populer dimuat`,"green")
-      // kick off full IDX load via ref (avoids circular dep)
-      setTimeout(() => { if (loadAllIDXScreenerRef.current) loadAllIDXScreenerRef.current() }, 500)
-    } else { notify("Gagal memuat data pasar","red") }
+    try {
+      // Load static JSON — 958 saham, fundamental + harga IDX
+      const ts = new Date().toISOString().slice(0,10)
+      const res = await fetch(`/idx_stocks.json?v=${ts}`)
+      if (res.ok) {
+        const json = await res.json()
+        const raw = (json.data || []).filter(s => s.c)
+        const arr = raw.map(s => ({
+          ...s,
+          price:  Number(s.price)  || 0,
+          chgPct: Number(s.chgPct ?? s.chgpct) || 0,
+          chg:    Number(s.chg)    || 0,
+          pe:     Number(s.pe)     || 0,
+          pbv:    Number(s.pbv)    || 0,
+          roe:    Number(s.roe)    || 0,
+          dy:     Number(s.dy)     || 0,
+          roa:    Number(s.roa)    || 0,
+          der:    Number(s.der)    || 0,
+          npm:    Number(s.npm)    || 0,
+          vol:    Number(s.vol)    || 0,
+        }))
+        if (arr.length > 100) {
+          setScreenerData(arr)
+          const dict = {}
+          arr.forEach(s => { dict[s.c] = s })
+          setLiveCache(p => ({ ...p, ...dict }))
+          setLastSync(json.updated || ts)
+          setScreenerLoaded(true)
+          notify(`✓ ${arr.length} saham IDX (${json.updated || ts})`, "green")
+          setSyncing(false)
+          return
+        }
+      }
+    } catch(e) { console.warn("idx_stocks.json:", e.message) }
+
+    // Fallback: Yahoo API untuk saham-saham populer
+    try {
+      const data = await fetchBatchLiveQuotes(POPULAR_IDX_SYMBOLS)
+      const arr = Object.values(data)
+      if (arr.length > 0) {
+        setScreenerData(arr)
+        const dict = {}; arr.forEach(i => { dict[i.c] = i })
+        setLiveCache(p => ({ ...p, ...dict }))
+        setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
+        notify(`✓ ${arr.length} saham (fallback mode)`, "amber")
+      } else { notify("Gagal memuat data pasar", "red") }
+    } catch(e) { notify("Error: " + e.message, "red") }
     setSyncing(false)
   }, [notify])
 
   useEffect(() => { if (session && !screenerLoaded) loadScreener() }, [session, screenerLoaded, loadScreener])
+
+  // corp-action auto-load added below after loadCorpActions defined
 
   const syncPrices = useCallback(async () => {
     if (!portfolio.length) return
@@ -448,42 +436,46 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
     if (pushEnabled && Object.keys(liveCache).length>0 && portfolio.length>0) checkAlerts()
   }, [liveCache, pushEnabled, checkAlerts])
 
-  // ── Corp Actions: load from IDX + fallback data ───────────
+  // ── Corp Actions: fallback data (2026) + IDX fetch ────────
   const CORP_FALLBACK = [
-    { code:"BBCA", name:"Bank Central Asia",     type:"Dividen Tunai", desc:"Rp 340/saham",               recordDate:"2025-06-14", payDate:"2025-06-28" },
-    { code:"BBRI", name:"Bank Rakyat Indonesia", type:"Dividen Tunai", desc:"Rp 220/saham",               recordDate:"2025-06-10", payDate:"2025-06-24" },
-    { code:"BMRI", name:"Bank Mandiri",           type:"Dividen Tunai", desc:"Rp 310/saham",               recordDate:"2025-07-07", payDate:"2025-07-21" },
-    { code:"TLKM", name:"Telkom Indonesia",       type:"Dividen Tunai", desc:"Rp 185/saham",               recordDate:"2025-07-02", payDate:"2025-07-16" },
-    { code:"ADRO", name:"Adaro Energy",           type:"Dividen Tunai", desc:"Rp 480/saham",               recordDate:"2025-06-28", payDate:"2025-07-11" },
-    { code:"PTBA", name:"Bukit Asam",             type:"Dividen Tunai", desc:"Rp 620/saham",               recordDate:"2025-06-18", payDate:"2025-07-02" },
-    { code:"ITMG", name:"Indo Tambangraya",       type:"Dividen Tunai", desc:"Rp 1.250/saham",             recordDate:"2025-06-22", payDate:"2025-07-06" },
-    { code:"BBNI", name:"Bank Negara Indonesia",  type:"Dividen Tunai", desc:"Rp 192/saham",               recordDate:"2025-07-05", payDate:"2025-07-19" },
-    { code:"ASII", name:"Astra International",    type:"Dividen Tunai", desc:"Rp 228/saham",               recordDate:"2025-07-12", payDate:"2025-07-26" },
-    { code:"UNVR", name:"Unilever Indonesia",     type:"Dividen Tunai", desc:"Rp 210/saham",               recordDate:"2025-07-30", payDate:"2025-08-14" },
-    { code:"BREN", name:"Barito Renewables",      type:"Stock Split",   desc:"1:5 — 1 jadi 5 saham",      recordDate:"2025-06-15", payDate:"2025-06-15" },
-    { code:"AMMN", name:"Amman Mineral",          type:"Dividen Tunai", desc:"Rp 48/saham",               recordDate:"2025-07-20", payDate:"2025-08-03" },
-    { code:"KLBF", name:"Kalbe Farma",            type:"Stock Dividen", desc:"5:1 — tiap 5 dapat 1 baru", recordDate:"2025-07-25", payDate:"2025-08-09" },
-    { code:"PGAS", name:"Perusahaan Gas Negara",  type:"Dividen Tunai", desc:"Rp 158/saham",               recordDate:"2025-07-15", payDate:"2025-07-29" },
-    { code:"INDF", name:"Indofood",               type:"Dividen Tunai", desc:"Rp 275/saham",               recordDate:"2025-07-21", payDate:"2025-08-04" },
-    { code:"ICBP", name:"Indofood CBP",           type:"Dividen Tunai", desc:"Rp 185/saham",               recordDate:"2025-07-19", payDate:"2025-08-02" },
-    { code:"SIDO", name:"Sido Muncul",            type:"Dividen Tunai", desc:"Rp 28/saham",               recordDate:"2025-07-07", payDate:"2025-07-21" },
-    { code:"TOWR", name:"Sarana Menara",          type:"Dividen Tunai", desc:"Rp 32/saham",               recordDate:"2025-08-02", payDate:"2025-08-16" },
-    { code:"CPIN", name:"Charoen Pokphand",       type:"Dividen Tunai", desc:"Rp 55/saham",               recordDate:"2025-07-28", payDate:"2025-08-11" },
-    { code:"GOTO", name:"GoTo Gojek Tokopedia",   type:"RUPS",          desc:"Agenda: Laporan Tahunan",   recordDate:"2025-06-08", payDate:"2025-06-08" },
-    { code:"TLKM", name:"Telkom Indonesia",       type:"RUPS",          desc:"Agenda: Pengangkatan Direksi",recordDate:"2025-07-22", payDate:"2025-07-22" },
-    { code:"BBCA", name:"Bank Central Asia",     type:"Rights Issue",  desc:"Rasio 5:1, Harga Rp 8.500/saham",recordDate:"2025-08-10", payDate:"2025-08-25" },
-    { code:"WIKA", name:"Wijaya Karya",           type:"Rights Issue",  desc:"Rasio 3:1, Harga Rp 210",   recordDate:"2025-08-05", payDate:"2025-08-19" },
-    { code:"BYAN", name:"Bayan Resources",        type:"Dividen Tunai", desc:"USD 0.30/saham",            recordDate:"2025-08-20", payDate:"2025-09-03" },
-    { code:"SMGR", name:"Semen Indonesia",        type:"Dividen Tunai", desc:"Rp 116/saham",              recordDate:"2025-07-31", payDate:"2025-08-14" },
+    { code:"BBCA", name:"Bank Central Asia",     type:"Dividen Tunai", desc:"Rp 340/saham",                   recordDate:"2026-04-14", payDate:"2026-04-28" },
+    { code:"BBRI", name:"Bank Rakyat Indonesia", type:"Dividen Tunai", desc:"Rp 220/saham",                   recordDate:"2026-04-10", payDate:"2026-04-24" },
+    { code:"BMRI", name:"Bank Mandiri",           type:"Dividen Tunai", desc:"Rp 310/saham",                   recordDate:"2026-05-07", payDate:"2026-05-21" },
+    { code:"TLKM", name:"Telkom Indonesia",       type:"Dividen Tunai", desc:"Rp 185/saham",                   recordDate:"2026-05-02", payDate:"2026-05-16" },
+    { code:"ADRO", name:"Adaro Energy",           type:"Dividen Tunai", desc:"Rp 480/saham",                   recordDate:"2026-04-28", payDate:"2026-05-12" },
+    { code:"PTBA", name:"Bukit Asam",             type:"Dividen Tunai", desc:"Rp 620/saham",                   recordDate:"2026-04-18", payDate:"2026-05-02" },
+    { code:"ITMG", name:"Indo Tambangraya",       type:"Dividen Tunai", desc:"Rp 1.250/saham",                 recordDate:"2026-04-22", payDate:"2026-05-06" },
+    { code:"BBNI", name:"Bank Negara Indonesia",  type:"Dividen Tunai", desc:"Rp 192/saham",                   recordDate:"2026-05-05", payDate:"2026-05-19" },
+    { code:"ASII", name:"Astra International",    type:"Dividen Tunai", desc:"Rp 228/saham",                   recordDate:"2026-05-12", payDate:"2026-05-26" },
+    { code:"UNVR", name:"Unilever Indonesia",     type:"Dividen Tunai", desc:"Rp 210/saham",                   recordDate:"2026-04-30", payDate:"2026-05-14" },
+    { code:"BREN", name:"Barito Renewables",      type:"Stock Split",   desc:"1:5 — 1 saham lama jadi 5",     recordDate:"2026-04-15", payDate:"2026-04-15" },
+    { code:"AMMN", name:"Amman Mineral",          type:"Dividen Tunai", desc:"Rp 48/saham",                    recordDate:"2026-05-20", payDate:"2026-06-03" },
+    { code:"KLBF", name:"Kalbe Farma",            type:"Stock Dividen", desc:"5:1 — tiap 5 saham dapat 1 baru",recordDate:"2026-05-25", payDate:"2026-06-09" },
+    { code:"PGAS", name:"Perusahaan Gas Negara",  type:"Dividen Tunai", desc:"Rp 158/saham",                   recordDate:"2026-05-15", payDate:"2026-05-29" },
+    { code:"INDF", name:"Indofood",               type:"Dividen Tunai", desc:"Rp 275/saham",                   recordDate:"2026-05-21", payDate:"2026-06-04" },
+    { code:"ICBP", name:"Indofood CBP",           type:"Dividen Tunai", desc:"Rp 185/saham",                   recordDate:"2026-05-19", payDate:"2026-06-02" },
+    { code:"SIDO", name:"Sido Muncul",            type:"Dividen Tunai", desc:"Rp 28/saham",                    recordDate:"2026-04-07", payDate:"2026-04-21" },
+    { code:"TOWR", name:"Sarana Menara",          type:"Dividen Tunai", desc:"Rp 32/saham",                    recordDate:"2026-06-02", payDate:"2026-06-16" },
+    { code:"CPIN", name:"Charoen Pokphand",       type:"Dividen Tunai", desc:"Rp 55/saham",                    recordDate:"2026-05-28", payDate:"2026-06-11" },
+    { code:"GOTO", name:"GoTo Gojek Tokopedia",   type:"RUPS",          desc:"Persetujuan Laporan Tahunan",    recordDate:"2026-04-08", payDate:"2026-04-08" },
+    { code:"TLKM", name:"Telkom Indonesia",       type:"RUPS",          desc:"Pengangkatan Direksi 2026–2029", recordDate:"2026-05-22", payDate:"2026-05-22" },
+    { code:"BBCA", name:"Bank Central Asia",      type:"Rights Issue",  desc:"Rasio 5:1 · Harga Rp 8.500",    recordDate:"2026-06-10", payDate:"2026-06-25" },
+    { code:"WIKA", name:"Wijaya Karya",           type:"Rights Issue",  desc:"Rasio 3:1 · Harga Rp 210",      recordDate:"2026-06-05", payDate:"2026-06-19" },
+    { code:"BYAN", name:"Bayan Resources",        type:"Dividen Tunai", desc:"USD 0.30/saham",                 recordDate:"2026-06-20", payDate:"2026-07-04" },
+    { code:"SMGR", name:"Semen Indonesia",        type:"Dividen Tunai", desc:"Rp 116/saham",                   recordDate:"2026-05-31", payDate:"2026-06-14" },
+    { code:"AADI", name:"Adaro Andalan Indonesia",type:"Dividen Tunai", desc:"Rp 520/saham",                   recordDate:"2026-04-25", payDate:"2026-05-09" },
+    { code:"ANTM", name:"Aneka Tambang",          type:"Dividen Tunai", desc:"Rp 45/saham",                    recordDate:"2026-05-14", payDate:"2026-05-28" },
+    { code:"BBTN", name:"Bank Tabungan Negara",   type:"RUPS",          desc:"Restrukturisasi & RKAP 2026",    recordDate:"2026-04-16", payDate:"2026-04-16" },
   ]
 
   const loadCorpActions = useCallback(async () => {
     setCorpLoading(true)
-    const today = new Date().toISOString().slice(0,10)
-    const futureDate = new Date(Date.now()+180*86400000).toISOString().slice(0,10)
+    // Tampilkan semua event: past 30 hari + future 6 bulan
+    const past30   = new Date(Date.now()-30*86400000).toISOString().slice(0,10)
+    const future6m = new Date(Date.now()+180*86400000).toISOString().slice(0,10)
     try {
       const res = await fetch(
-        `https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=200&type=&startDate=${today}&endDate=${futureDate}`,
+        `https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=300&type=&startDate=${past30}&endDate=${future6m}`,
         { headers:{"User-Agent":"Mozilla/5.0","Referer":"https://www.idx.co.id/"}, signal:AbortSignal.timeout(10000) }
       )
       if (res.ok) {
@@ -495,13 +487,18 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           desc:       item.Ratio||item.Description||item.Value||"",
           recordDate: (item.RecordDate||item.CumDate||"").slice(0,10),
           payDate:    (item.PaymentDate||item.ExDate||"").slice(0,10),
-        })).filter(r=>r.code && r.recordDate >= today)
-        setCorpActions(rows.length>0 ? rows : CORP_FALLBACK)
+        })).filter(r => r.code && r.recordDate)
+        setCorpActions(rows.length > 5 ? rows : CORP_FALLBACK)
       } else { setCorpActions(CORP_FALLBACK) }
     } catch(e) { console.warn("Corp action:", e.message); setCorpActions(CORP_FALLBACK) }
     setCorpLoaded(true)
     setCorpLoading(false)
   }, [])
+
+  // ── Auto-load corp actions on mount + tab switch ───────────
+  useEffect(() => {
+    if (session && !corpLoaded && !corpLoading) loadCorpActions()
+  }, [session, loadCorpActions]) // loads as soon as session is ready
 
   // ── Subscription: check trial status ─────────────────────
   const checkSubscription = useCallback((profile_) => {
@@ -641,13 +638,18 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
     let list=[...screenerData]
     if (screenerQ.trim()) {
       const q=screenerQ.toUpperCase()
-      list=list.filter(s=>s.c.includes(q)||s.n.toUpperCase().includes(q))
+      list=list.filter(s=>s.c.includes(q)||(s.n||"").toUpperCase().includes(q))
     }
-    if (screenerFilter==="Dividen") list=list.filter(s=>Number(s.dy)>=5).sort((a,b)=>Number(b.dy)-Number(a.dy))
-    else if (screenerFilter==="PBV") list=list.filter(s=>Number(s.pbv)>0&&Number(s.pbv)<1.5).sort((a,b)=>Number(a.pbv)-Number(b.pbv))
-    else if (screenerFilter==="PE")  list=list.filter(s=>Number(s.pe)>0&&Number(s.pe)<15).sort((a,b)=>Number(a.pe)-Number(b.pe))
-    else if (screenerFilter==="ROE") list=list.filter(s=>Number(s.roe)>15).sort((a,b)=>Number(b.roe)-Number(a.roe))
-    return list.slice(0,40)
+    const f = screenerFilter
+    if      (f==="LQ45")      list=list.filter(s=>s.idx_member||s.idx_list?.includes("LQ45")).sort((a,b)=>b.vol-a.vol)
+    else if (f==="Dividen")   list=list.filter(s=>Number(s.dy)>=5).sort((a,b)=>Number(b.dy)-Number(a.dy))
+    else if (f==="PBV")       list=list.filter(s=>Number(s.pbv)>0&&Number(s.pbv)<1.5).sort((a,b)=>Number(a.pbv)-Number(b.pbv))
+    else if (f==="PE")        list=list.filter(s=>Number(s.pe)>0&&Number(s.pe)<15).sort((a,b)=>Number(a.pe)-Number(b.pe))
+    else if (f==="ROE")       list=list.filter(s=>Number(s.roe)>15).sort((a,b)=>Number(b.roe)-Number(a.roe))
+    else if (f==="GrowthMom") list=list.filter(s=>Number(s.wk4)>0&&Number(s.wk13)>0).sort((a,b)=>Number(b.wk4)-Number(a.wk4))
+    else if (f==="ValuePick") list=list.filter(s=>Number(s.pe)>0&&Number(s.pe)<12&&Number(s.pbv)>0&&Number(s.pbv)<1.5&&Number(s.roe)>10).sort((a,b)=>Number(b.roe)-Number(a.roe))
+    else list=list.filter(s=>s.price>0).sort((a,b)=>b.vol-a.vol)  // Semua: sort by volume
+    return list.slice(0,80)
   })()
 
   // Forecast
@@ -874,12 +876,73 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 const newAvg   = canLot>0?(posVal+canRp)/(pos.shares+canLot*100):pos.avg_price
                 const newAlloc = capital>0?((posVal+canRp)/capital)*100:0
                 const isSL=pnlPct<=-8, isAD=pnlPct<=-5&&pnlPct>-8, isAU=pnlPct>=5&&pnlPct<15, isTP1=pnlPct>=15, isTP2=pnlPct>=25
+
+                // ── MA200 Trend Signal ─────────────────────────────────
+                // Kalkulasi proxy MA200 dari data yang tersedia di liveCache
+                // Rumus: MA200 ≈ live / (1 + wk52_return/100)
+                // Ini karena harga setahun lalu = live / (1 + %perubahan_52w)
+                const stockData  = liveCache[pos.stock_code] || {}
+                const wk52ret    = Number(stockData.wk52  || 0)   // % change 52 week
+                const wk13ret    = Number(stockData.wk13  || 0)   // % change 13 week
+                const wk4ret     = Number(stockData.wk4   || 0)   // % change 4 week
+                // MA200 proxy = rata-rata harga selama ~1 tahun (approx dari wk52)
+                const ma200proxy = wk52ret !== 0 ? live / (1 + wk52ret/100) * 0.92 + live * 0.08 : 0
+                // MA50 proxy dari wk13 (13 minggu ≈ 65 hari trading, dekat MA50)
+                const ma50proxy  = wk13ret !== 0 ? live / (1 + wk13ret/100) * 0.8 + live * 0.2 : 0
+                // Trend signal
+                const hasMaData  = wk52ret !== 0 || wk13ret !== 0
+                const aboveMA200 = hasMaData && ma200proxy > 0 && live > ma200proxy
+                const belowMA200 = hasMaData && ma200proxy > 0 && live < ma200proxy
+                const aboveMA50  = hasMaData && ma50proxy  > 0 && live > ma50proxy
+                const belowMA50  = hasMaData && ma50proxy  > 0 && live < ma50proxy
+                // Trend classification
+                const trendUp    = aboveMA200 && aboveMA50   // bull: di atas MA200 & MA50
+                const trendDown  = belowMA200 && belowMA50   // bear: di bawah MA200 & MA50
+                const trendCaution = belowMA200 && aboveMA50 // death-cross zone: di bawah MA200 tapi di atas MA50
+                const trendRecov = aboveMA200 && belowMA50   // recovery: golden cross zone
                 return (
                   <div key={pos.id} className="fu" style={{ background:T.bg1,border:`1px solid ${isSL?T.rBdr:over20?T.aBdr:T.bdr2}`,borderRadius:18,overflow:"hidden",marginBottom:12,animationDelay:`${pidx*0.04}s` }}>
                     {isSL&&<div style={{ background:T.rBg,padding:"7px 14px",borderBottom:`1px solid ${T.rBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.red }}>⛔ CUT LOSS — sudah {pnlPct.toFixed(1)}%. Jual sekarang!</span></div>}
                     {over20&&!isSL&&<div style={{ background:T.aBg,padding:"7px 14px",borderBottom:`1px solid ${T.aBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.amber }}>⚠ Overweight {allocPct.toFixed(1)}% — melebihi 20%</span></div>}
                     {isTP2&&<div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🚀 TP2 +25% tercapai! Pertimbangkan jual 50–75%.</span></div>}
                     {isTP1&&!isTP2&&<div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🎯 TP1 +15% tercapai! Bisa jual 30–50%.</span></div>}
+                    {/* MA200 Trend Warning */}
+                    {hasMaData && trendDown && !isSL && (
+                      <div style={{ background:"#1a0a0a",padding:"7px 14px",borderBottom:`1px solid #cc000040`,display:"flex",alignItems:"center",gap:6 }}>
+                        <span style={{ fontSize:14 }}>📉</span>
+                        <div>
+                          <span style={{ fontSize:11,fontWeight:800,color:"#ff4444" }}>DOWNTREND — Di bawah MA200 & MA50</span>
+                          <span style={{ fontSize:10,color:"#ff6666",marginLeft:6 }}>Tren jangka panjang bearish. Hindari avg down agresif.</span>
+                        </div>
+                      </div>
+                    )}
+                    {hasMaData && trendCaution && !isSL && !trendDown && (
+                      <div style={{ background:T.aBg,padding:"7px 14px",borderBottom:`1px solid ${T.aBdr}`,display:"flex",alignItems:"center",gap:6 }}>
+                        <span style={{ fontSize:14 }}>⚠️</span>
+                        <div>
+                          <span style={{ fontSize:11,fontWeight:800,color:T.amber }}>WASPADA — Di bawah MA200</span>
+                          <span style={{ fontSize:10,color:T.amber,marginLeft:6 }}>Tren jangka panjang masih lemah. Pantau ketat.</span>
+                        </div>
+                      </div>
+                    )}
+                    {hasMaData && trendRecov && !isTP1 && !isTP2 && (
+                      <div style={{ background:"#0a1a0f",padding:"7px 14px",borderBottom:`1px solid #00cc4040`,display:"flex",alignItems:"center",gap:6 }}>
+                        <span style={{ fontSize:14 }}>🔄</span>
+                        <div>
+                          <span style={{ fontSize:11,fontWeight:800,color:"#44cc77" }}>RECOVERY — Golden cross zone</span>
+                          <span style={{ fontSize:10,color:"#66dd99",marginLeft:6 }}>Di atas MA200, tapi MA50 belum konfirmasi. Hati-hati.</span>
+                        </div>
+                      </div>
+                    )}
+                    {hasMaData && trendUp && !isTP1 && !isTP2 && (
+                      <div style={{ background:"#0a180a",padding:"7px 14px",borderBottom:`1px solid #00aa3340`,display:"flex",alignItems:"center",gap:6 }}>
+                        <span style={{ fontSize:14 }}>📈</span>
+                        <div>
+                          <span style={{ fontSize:11,fontWeight:800,color:"#33cc55" }}>UPTREND — Di atas MA200 & MA50</span>
+                          <span style={{ fontSize:10,color:"#55ee77",marginLeft:6 }}>Tren jangka panjang bullish. Boleh hold atau tambah.</span>
+                        </div>
+                      </div>
+                    )}
                     <div style={{ padding:"14px 14px 0" }}>
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
                         <div><div style={{ fontSize:16,fontWeight:900,color:T.t1 }}>{pos.stock_code}</div><div style={{ fontSize:10,color:T.t3,marginTop:1 }}>{pos.lot} lot · {pos.sector}</div></div>
@@ -973,8 +1036,17 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
             </form>
 
             <div style={{ display:"flex",gap:8,overflowX:"auto",paddingBottom:12,marginBottom:20 }} className="hide-scrollbar">
-              {[{id:"Semua",label:"Populer IDX"},{id:"Dividen",label:"Dividen >5%"},{id:"PBV",label:"PBV < 1x"},{id:"PE",label:"PE < 12x"},{id:"ROE",label:"ROE > 15%"}].map(f=>(
-                <button key={f.id} onClick={()=>setScreenerFilter(f.id)} style={{ background:screenerFilter===f.id?T.em:T.bg1,color:screenerFilter===f.id?T.bg0:T.t2,border:`1px solid ${screenerFilter===f.id?T.em:T.bdr2}`,borderRadius:99,padding:"10px 18px",fontSize:12,fontWeight:800,whiteSpace:"nowrap",cursor:"pointer",transition:".2s" }}>
+              {[
+                {id:"Semua",label:"Semua IDX"},
+                {id:"LQ45",label:"LQ45"},
+                {id:"Dividen",label:"Dividen >5%"},
+                {id:"PBV",label:"PBV < 1.5x"},
+                {id:"PE",label:"PE < 15x"},
+                {id:"ROE",label:"ROE > 15%"},
+                {id:"GrowthMom",label:"Momentum +"},
+                {id:"ValuePick",label:"Value Pick"},
+              ].map(f=>(
+                <button key={f.id} onClick={()=>setScreenerFilter(f.id)} style={{ background:screenerFilter===f.id?T.em:T.bg1,color:screenerFilter===f.id?T.bg0:T.t2,border:`1px solid ${screenerFilter===f.id?T.em:T.bdr2}`,borderRadius:99,padding:"9px 16px",fontSize:11,fontWeight:800,whiteSpace:"nowrap",cursor:"pointer",transition:".2s",flexShrink:0 }}>
                   {f.label}
                 </button>
               ))}
@@ -998,8 +1070,8 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     </div>
                     <div style={{ textAlign:"right" }}>
                       <div style={{ fontSize:11,fontWeight:800,color:T.t3,marginBottom:4 }}>HARGA LIVE</div>
-                      <div style={{ fontSize:18,fontWeight:900,color:T.green }}>Rp {formatRupiah(s.price)}</div>
-                      <div style={{ fontSize:12,fontWeight:700,color:s.chgPct>=0?T.green:T.red }}>{formatPercent(s.chgPct)}</div>
+                      <div style={{ fontSize:18,fontWeight:900,color:(s.chgPct??s.chgpct)>=0?T.green:T.red }}>Rp {formatRupiah(s.price||0)}</div>
+                      <div style={{ fontSize:12,fontWeight:700,color:(s.chgPct??s.chgpct)>=0?T.green:T.red }}>{(s.chgPct??s.chgpct)>=0?"+":""}{Number((s.chgPct??s.chgpct)||0).toFixed(2)}%</div>
                     </div>
                   </div>
 
@@ -1011,18 +1083,33 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     <FBadge label="ROE" value={s.roe>0?`${s.roe}%`:null} good={s.roe>=15}/>
                   </div>
 
-                  {/* Extra fundamental row jika ada */}
-                  {(s.npm||s.der) ? (
-                    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16 }}>
+                  {/* Extra fundamentals row */}
+                  {(s.npm>0||s.der>0) && (
+                    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12 }}>
                       <FBadge label="NET MARGIN" value={s.npm>0?`${s.npm}%`:null} good={s.npm>10}/>
                       <FBadge label="DER" value={s.der>0?`${s.der}x`:null} good={s.der>0&&s.der<1.5}/>
+                    </div>
+                  )}
+
+                  {/* Performance chips */}
+                  {(s.wk4||s.wk13||s.wk52) ? (
+                    <div style={{ display:"flex",gap:6,marginBottom:12,flexWrap:"wrap" }}>
+                      {[["4W",s.wk4],["13W",s.wk13],["52W",s.wk52]].map(([lbl,v])=> v!=null && v!==0 ? (
+                        <span key={lbl} style={{ fontSize:9,fontWeight:800,padding:"3px 8px",borderRadius:6,
+                          background:Number(v)>=0?T.gBg:T.rBg,
+                          color:Number(v)>=0?T.green:T.red,
+                          border:`1px solid ${Number(v)>=0?T.gBdr:T.rBdr}` }}>
+                          {lbl} {Number(v)>=0?"+":""}{Number(v).toFixed(1)}%
+                        </span>
+                      ) : null)}
+                      {s.sector && <span style={{ fontSize:9,fontWeight:700,padding:"3px 8px",borderRadius:6,background:T.bg2,color:T.t3,border:`1px solid ${T.bdr}` }}>{s.sector}</span>}
                     </div>
                   ) : null}
 
                   {/* Pesan jika semua fundamental kosong */}
                   {(!s.dy&&!s.pbv&&!s.pe&&!s.roe) && (
-                    <div style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:11,color:T.amber,fontWeight:600 }}>
-                      ⚡ Fundamental belum tersedia. Coba refresh atau klik Cari untuk tarik ulang.
+                    <div style={{ background:T.bg2,border:`1px solid ${T.bdr}`,borderRadius:10,padding:"7px 12px",marginBottom:10,fontSize:10,color:T.t3 }}>
+                      Data fundamental tidak tersedia untuk saham ini
                     </div>
                   )}
                   <Btn full onClick={()=>{ setAddStock(s); setBuyPrice(String(s.price||0)); setAddModal(true) }}>
@@ -1256,12 +1343,16 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           const MONTHS_ID = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"]
           const DAYS_ID = ["Min","Sen","Sel","Rab","Kam","Jum","Sab"]
 
-          // Filter corp actions
-          let filteredCA = corpActions.filter(c => c.recordDate >= today)
+          // Filter corp actions — semua event untuk dots kalender
+          let filteredCA = [...corpActions]
           if (corpFilter==="myPorto") filteredCA = filteredCA.filter(c=>myPCodes.includes(c.code))
           if (corpTypeFilter!=="Semua") filteredCA = filteredCA.filter(c=>c.type?.includes(corpTypeFilter))
 
-          // Group by recordDate for calendar dots
+          // Pisahkan upcoming vs past untuk list
+          const upcomingCA = filteredCA.filter(c => c.recordDate >= today)
+          const pastCA     = filteredCA.filter(c => c.recordDate < today)
+
+          // Group by recordDate for calendar dots — semua event
           const caByDate = {}
           filteredCA.forEach(ca => {
             const d = ca.recordDate
@@ -1391,27 +1482,33 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               )}
 
               {/* Load trigger */}
-              {!corpLoaded&&!corpLoading&&<div style={{ textAlign:"center",padding:"30px 20px" }}><Btn onClick={loadCorpActions}>Muat Data Corporate Action</Btn></div>}
+              {!corpLoaded&&!corpLoading&&(
+                <div style={{ textAlign:"center",padding:"30px 20px" }}>
+                  <CalendarIcon size={36} color={T.t3} style={{ margin:"0 auto 16px",opacity:0.4 }}/>
+                  <p style={{ fontSize:13,color:T.t2,marginBottom:16 }}>Klik untuk muat data corporate action IDX</p>
+                  <Btn onClick={loadCorpActions}>Muat Data Corporate Action</Btn>
+                </div>
+              )}
               {corpLoading&&<div style={{ textAlign:"center",padding:"30px 20px",display:"flex",flexDirection:"column",alignItems:"center",gap:10 }}><Spinner size={24}/><span style={{ color:T.t2,fontSize:12 }}>Mengambil data dari IDX...</span></div>}
 
-              {/* List below calendar */}
-              {corpLoaded && filteredCA.length>0 && (
-                <div style={{ padding:"0 16px" }}>
-                  <div style={{ fontSize:12,fontWeight:800,color:T.t3,letterSpacing:1,marginBottom:12 }}>SEMUA AGENDA MENDATANG ({filteredCA.length})</div>
-                  {filteredCA.sort((a,b)=>a.recordDate.localeCompare(b.recordDate)).map((item,i)=>{
+              {/* List below calendar — Upcoming */}
+              {corpLoaded && upcomingCA.length>0 && (
+                <div style={{ padding:"0 16px 4px" }}>
+                  <div style={{ fontSize:11,fontWeight:800,color:T.t3,letterSpacing:1,marginBottom:10 }}>AKAN DATANG ({upcomingCA.length})</div>
+                  {[...upcomingCA].sort((a,b)=>a.recordDate.localeCompare(b.recordDate)).map((item,i)=>{
                     const ts=typeStyle[item.type]||{col:T.t2,bg:T.bg2,bdr:T.bdr,icon:"📄"}
                     const owned=myPCodes.includes(item.code)
                     const isNear=item.recordDate<=new Date(Date.now()+7*86400000).toISOString().slice(0,10)
                     return (
-                      <div key={i} className="fu" style={{ background:T.bg1,border:`1px solid ${owned?T.em+"60":T.bdr2}`,borderRadius:16,padding:14,marginBottom:10,animationDelay:`${i*0.03}s` }}>
-                        {isNear&&<div style={{ background:T.aBg,padding:"4px 10px",borderRadius:7,display:"inline-block",marginBottom:8 }}><span style={{ fontSize:9,fontWeight:800,color:T.amber }}>⏰ Dalam 7 hari</span></div>}
-                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:item.desc?8:0 }}>
+                      <div key={i} className="fu" style={{ background:T.bg1,border:`1px solid ${owned?T.em+"60":T.bdr2}`,borderRadius:14,padding:"12px 14px",marginBottom:8,animationDelay:`${i*0.03}s` }}>
+                        {isNear&&<span style={{ fontSize:9,fontWeight:800,color:T.amber,background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:6,padding:"2px 8px",marginBottom:6,display:"inline-block" }}>⏰ Dalam 7 hari</span>}
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:item.desc?6:0 }}>
                           <div style={{ display:"flex",gap:9,alignItems:"center" }}>
                             <span style={{ width:32,height:32,background:T.bg2,border:`1px solid ${T.bdr}`,borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:T.t1,flexShrink:0 }}>{item.code.slice(0,2)}</span>
-                            <div><div style={{ fontSize:13,fontWeight:900,color:T.t1 }}>{item.code}{owned&&<span style={{ color:T.green,fontWeight:800,fontSize:10 }}> ★</span>}</div><div style={{ fontSize:10,color:T.t3 }}>{item.recordDate}</div></div>
+                            <div><div style={{ fontSize:13,fontWeight:900,color:T.t1 }}>{item.code}{owned&&<span style={{ color:T.green,fontSize:10 }}> ★</span>}</div><div style={{ fontSize:10,color:T.t3 }}>{item.recordDate}</div></div>
                           </div>
-                          <div style={{ background:ts.bg,border:`1px solid ${ts.bdr}`,borderRadius:8,padding:"4px 8px",display:"flex",alignItems:"center",gap:3 }}>
-                            <span style={{ fontSize:10 }}>{ts.icon}</span><span style={{ fontSize:9,fontWeight:800,color:ts.col }}>{item.type}</span>
+                          <div style={{ background:ts.bg,border:`1px solid ${ts.bdr}`,borderRadius:8,padding:"3px 8px",display:"flex",alignItems:"center",gap:3 }}>
+                            <span>{ts.icon}</span><span style={{ fontSize:9,fontWeight:800,color:ts.col }}>{item.type}</span>
                           </div>
                         </div>
                         {item.desc&&<div style={{ fontSize:11,color:ts.col,fontWeight:700,paddingLeft:41 }}>{item.desc}</div>}
@@ -1419,6 +1516,33 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     )
                   })}
                 </div>
+              )}
+
+              {/* Past events */}
+              {corpLoaded && pastCA.length>0 && (
+                <div style={{ padding:"4px 16px 4px" }}>
+                  <div style={{ fontSize:11,fontWeight:800,color:T.t3,letterSpacing:1,marginBottom:10,marginTop:4 }}>SUDAH LEWAT ({pastCA.length})</div>
+                  {[...pastCA].sort((a,b)=>b.recordDate.localeCompare(a.recordDate)).map((item,i)=>{
+                    const ts=typeStyle[item.type]||{col:T.t2,bg:T.bg2,bdr:T.bdr,icon:"📄"}
+                    const owned=myPCodes.includes(item.code)
+                    return (
+                      <div key={i} style={{ background:T.bg1,border:`1px solid ${T.bdr}`,borderRadius:14,padding:"10px 14px",marginBottom:7,opacity:0.65 }}>
+                        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:item.desc?5:0 }}>
+                          <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+                            <span style={{ width:28,height:28,background:T.bg2,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:900,color:T.t3,flexShrink:0 }}>{item.code.slice(0,2)}</span>
+                            <div><div style={{ fontSize:12,fontWeight:800,color:T.t2 }}>{item.code}{owned&&<span style={{ color:T.green,fontSize:9 }}> ★</span>}</div><div style={{ fontSize:10,color:T.t3 }}>{item.recordDate} ✓</div></div>
+                          </div>
+                          <span style={{ fontSize:9,fontWeight:700,color:T.t3,background:T.bg2,borderRadius:6,padding:"2px 7px" }}>{item.type}</span>
+                        </div>
+                        {item.desc&&<div style={{ fontSize:10,color:T.t3,paddingLeft:36 }}>{item.desc}</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {corpLoaded && filteredCA.length===0 && (
+                <div style={{ textAlign:"center",padding:"30px 20px",color:T.t3,fontSize:13 }}>Tidak ada data sesuai filter</div>
               )}
             </div>
           )
