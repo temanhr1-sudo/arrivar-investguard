@@ -944,7 +944,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         )}
 
         {/* ══ SCREENER ══ */}
-                {tab==="screener" && (
+        {tab==="screener" && (
           <div className="fu" style={{ padding:"56px 20px 20px" }}>
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24 }}>
               <div>
@@ -1000,7 +1000,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                       <div style={{ fontSize:12,fontWeight:700,color:s.chgPct>=0?T.green:T.red }}>{formatPercent(s.chgPct)}</div>
                     </div>
                   </div>
-              
+
                   {/* Fundamental 4 kolom */}
                   <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:16 }}>
                     <FBadge label="DIV YIELD" value={s.dy>0?`${s.dy}%`:null} good={s.dy>=5}/>
