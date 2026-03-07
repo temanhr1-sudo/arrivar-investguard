@@ -11,6 +11,20 @@ import { supabase }          from "./lib/supabase"
 import { fetchBatchLiveQuotes, fetchSingleStockSearch } from "./lib/yahooApi"
 import { calculateMoneyManagement, generateAdvisorySuggestions } from "./lib/moneyManagement"
 import { POPULAR_IDX_SYMBOLS, DARK, LIGHT, getGlobalStyles } from "./lib/constants"
+
+// ── Dividend Yield statis (sumber: laporan dividen FY2024-2025) ──
+const STATIC_DY = {
+  BBRI:6.2, BMRI:5.4, BBNI:5.1, TLKM:7.2, PTBA:9.8, ITMG:11.6, ADRO:8.9,
+  HRUM:7.8, BJTM:8.1, BJBR:7.4, PGAS:6.8, UNVR:9.2, AALI:5.9, LSIP:7.1,
+  BYAN:6.4, ELSA:5.4, AUTO:5.0, SMSM:5.8, BSDE:2.1, PWON:2.8, CTRA:2.6,
+  INDF:5.2, BBCA:2.9, ASII:4.5, KLBF:3.1, SIDO:5.6, TOWR:4.1, SMGR:3.8,
+  AMMN:1.4, ANTM:2.6, INCO:3.8, TINS:2.4, MEDC:2.4, EXCL:3.0, ISAT:0,
+  INKP:1.8, BRPT:1.9, MYOR:1.3, ACES:3.4, MAPI:1.5, JSMR:2.6, CPIN:2.6,
+  AADI:5.2, BBTN:3.1, BBMD:4.2, BNGA:3.8, NISP:2.8, MEGA:4.1, BTPS:0,
+  WSKT:0, WIKA:0, PTPP:1.2, ADHI:1.1, WTON:1.8, NRCA:3.2, TOTL:4.8,
+  SSMS:3.6, PALM:2.8, TBLA:2.1, SGRO:3.4, DSNG:2.6, ICBP:3.4, ULTJ:1.8,
+  ROTI:1.6, DLTA:4.2, MDKA:0, PGEO:1.8, ESSA:2.4, BREN:0, GOTO:0,
+}
 import { formatRupiah, formatRupiahCompact, formatPercent, getProfitColor, getTodayDateString, getCurrentTimeString, exportDataToCSV } from "./lib/utils"
 
 // ─── Theme Context ───────────────────────────────────────
@@ -286,20 +300,23 @@ export default function App() {
       if (res.ok) {
         const json = await res.json()
         const raw = (json.data || []).filter(s => s.c)
-        const arr = raw.map(s => ({
-          ...s,
-          price:  Number(s.price)  || 0,
-          chgPct: Number(s.chgPct ?? s.chgpct) || 0,
-          chg:    Number(s.chg)    || 0,
-          pe:     Number(s.pe)     || 0,
-          pbv:    Number(s.pbv)    || 0,
-          roe:    Number(s.roe)    || 0,
-          dy:     Number(s.dy)     || 0,
-          roa:    Number(s.roa)    || 0,
-          der:    Number(s.der)    || 0,
-          npm:    Number(s.npm)    || 0,
-          vol:    Number(s.vol)    || 0,
-        }))
+        const arr = raw.map(s => {
+          const dy_val = Number(s.dy) > 0 ? Number(s.dy) : (STATIC_DY[s.c] || 0)
+          return {
+            ...s,
+            price:  Number(s.price)  || 0,
+            chgPct: Number(s.chgPct ?? s.chgpct) || 0,
+            chg:    Number(s.chg)    || 0,
+            pe:     Number(s.pe)     || 0,
+            pbv:    Number(s.pbv)    || 0,
+            roe:    Number(s.roe)    || 0,
+            dy:     dy_val,
+            roa:    Number(s.roa)    || 0,
+            der:    Number(s.der)    || 0,
+            npm:    Number(s.npm)    || 0,
+            vol:    Number(s.vol)    || 0,
+          }
+        })
         if (arr.length > 100) {
           setScreenerData(arr)
           const dict = {}
@@ -338,7 +355,31 @@ export default function App() {
     setSyncing(true)
     const codes = portfolio.map(p=>p.stock_code)
     const upd = await fetchBatchLiveQuotes(codes)
-    if (Object.keys(upd).length > 0) { setLiveCache(p=>({...p,...upd})); setLastSync(getCurrentTimeString()) }
+    if (Object.keys(upd).length > 0) {
+      setLiveCache(prev => {
+        const next = { ...prev }
+        for (const [code, fresh] of Object.entries(upd)) {
+          // Merge: keep existing wk52/wk13/wk4/fundamentals, only update price fields
+          const existing = prev[code] || {}
+          next[code] = {
+            ...existing,           // preserve wk52, wk13, wk4, pe, pbv, roe, dy dll
+            ...fresh,              // Yahoo live: price, chgPct, volume, high, low
+            // Re-apply fundamentals from existing JSON if Yahoo returned 0
+            pe:  (fresh.pe  > 0 ? fresh.pe  : existing.pe)  || 0,
+            pbv: (fresh.pbv > 0 ? fresh.pbv : existing.pbv) || 0,
+            roe: (fresh.roe > 0 ? fresh.roe : existing.roe) || 0,
+            dy:  (fresh.dy  > 0 ? fresh.dy  : existing.dy)  || 0,
+            der: (fresh.der > 0 ? fresh.der : existing.der) || 0,
+            npm: (fresh.npm > 0 ? fresh.npm : existing.npm) || 0,
+            wk52: existing.wk52 || fresh.wk52 || 0,
+            wk13: existing.wk13 || fresh.wk13 || 0,
+            wk4:  existing.wk4  || fresh.wk4  || 0,
+          }
+        }
+        return next
+      })
+      setLastSync(getCurrentTimeString())
+    }
     setSyncing(false)
   }, [portfolio])
 
@@ -881,10 +922,12 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 // Kalkulasi proxy MA200 dari data yang tersedia di liveCache
                 // Rumus: MA200 ≈ live / (1 + wk52_return/100)
                 // Ini karena harga setahun lalu = live / (1 + %perubahan_52w)
+                // Ambil data MA dari screenerData (stabil, tidak ter-overwrite syncPrices)
                 const stockData  = liveCache[pos.stock_code] || {}
-                const wk52ret    = Number(stockData.wk52  || 0)   // % change 52 week
-                const wk13ret    = Number(stockData.wk13  || 0)   // % change 13 week
-                const wk4ret     = Number(stockData.wk4   || 0)   // % change 4 week
+                const scrData    = screenerData.find(s=>s.c===pos.stock_code) || {}
+                const wk52ret    = Number(scrData.wk52 || stockData.wk52 || 0)
+                const wk13ret    = Number(scrData.wk13 || stockData.wk13 || 0)
+                const wk4ret     = Number(scrData.wk4  || stockData.wk4  || 0)
                 // MA200 proxy = rata-rata harga selama ~1 tahun (approx dari wk52)
                 const ma200proxy = wk52ret !== 0 ? live / (1 + wk52ret/100) * 0.92 + live * 0.08 : 0
                 // MA50 proxy dari wk13 (13 minggu ≈ 65 hari trading, dekat MA50)
@@ -907,42 +950,25 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     {isTP2&&<div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🚀 TP2 +25% tercapai! Pertimbangkan jual 50–75%.</span></div>}
                     {isTP1&&!isTP2&&<div style={{ background:T.gBg,padding:"7px 14px",borderBottom:`1px solid ${T.gBdr}` }}><span style={{ fontSize:11,fontWeight:800,color:T.green }}>🎯 TP1 +15% tercapai! Bisa jual 30–50%.</span></div>}
                     {/* MA200 Trend Warning */}
-                    {hasMaData && trendDown && !isSL && (
-                      <div style={{ background:"#1a0a0a",padding:"7px 14px",borderBottom:`1px solid #cc000040`,display:"flex",alignItems:"center",gap:6 }}>
-                        <span style={{ fontSize:14 }}>📉</span>
-                        <div>
-                          <span style={{ fontSize:11,fontWeight:800,color:"#ff4444" }}>DOWNTREND — Di bawah MA200 & MA50</span>
-                          <span style={{ fontSize:10,color:"#ff6666",marginLeft:6 }}>Tren jangka panjang bearish. Hindari avg down agresif.</span>
+                    {hasMaData && (()=>{
+                      const [dot,label,sub,bc,tc] = trendDown
+                        ? ["#ff4444","Downtrend","Di bawah MA200 & MA50","#ff444420","#ff4444"]
+                        : trendCaution
+                        ? [T.amber,"Waspada MA200","Tren lemah, pantau ketat",T.aBg,T.amber]
+                        : trendRecov
+                        ? ["#44cc77","Konsolidasi","Di atas MA200, MA50 belum konfirm","#44cc7715","#44cc77"]
+                        : trendUp
+                        ? ["#33cc55","Uptrend","Di atas MA200 & MA50","#33cc5512","#33cc55"]
+                        : [null,null,null,null,null]
+                      if (!dot) return null
+                      return (
+                        <div style={{ background:bc,padding:"5px 14px",borderBottom:`1px solid ${tc}25`,display:"flex",alignItems:"center",gap:7 }}>
+                          <span style={{ width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0,display:"inline-block" }}/>
+                          <span style={{ fontSize:10,fontWeight:800,color:tc }}>{label}</span>
+                          <span style={{ fontSize:10,color:tc,opacity:0.75 }}>· {sub}</span>
                         </div>
-                      </div>
-                    )}
-                    {hasMaData && trendCaution && !isSL && !trendDown && (
-                      <div style={{ background:T.aBg,padding:"7px 14px",borderBottom:`1px solid ${T.aBdr}`,display:"flex",alignItems:"center",gap:6 }}>
-                        <span style={{ fontSize:14 }}>⚠️</span>
-                        <div>
-                          <span style={{ fontSize:11,fontWeight:800,color:T.amber }}>WASPADA — Di bawah MA200</span>
-                          <span style={{ fontSize:10,color:T.amber,marginLeft:6 }}>Tren jangka panjang masih lemah. Pantau ketat.</span>
-                        </div>
-                      </div>
-                    )}
-                    {hasMaData && trendRecov && !isTP1 && !isTP2 && (
-                      <div style={{ background:"#0a1a0f",padding:"7px 14px",borderBottom:`1px solid #00cc4040`,display:"flex",alignItems:"center",gap:6 }}>
-                        <span style={{ fontSize:14 }}>🔄</span>
-                        <div>
-                          <span style={{ fontSize:11,fontWeight:800,color:"#44cc77" }}>RECOVERY — Golden cross zone</span>
-                          <span style={{ fontSize:10,color:"#66dd99",marginLeft:6 }}>Di atas MA200, tapi MA50 belum konfirmasi. Hati-hati.</span>
-                        </div>
-                      </div>
-                    )}
-                    {hasMaData && trendUp && !isTP1 && !isTP2 && (
-                      <div style={{ background:"#0a180a",padding:"7px 14px",borderBottom:`1px solid #00aa3340`,display:"flex",alignItems:"center",gap:6 }}>
-                        <span style={{ fontSize:14 }}>📈</span>
-                        <div>
-                          <span style={{ fontSize:11,fontWeight:800,color:"#33cc55" }}>UPTREND — Di atas MA200 & MA50</span>
-                          <span style={{ fontSize:10,color:"#55ee77",marginLeft:6 }}>Tren jangka panjang bullish. Boleh hold atau tambah.</span>
-                        </div>
-                      </div>
-                    )}
+                      )
+                    })()}
                     <div style={{ padding:"14px 14px 0" }}>
                       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
                         <div><div style={{ fontSize:16,fontWeight:900,color:T.t1 }}>{pos.stock_code}</div><div style={{ fontSize:10,color:T.t3,marginTop:1 }}>{pos.lot} lot · {pos.sector}</div></div>
