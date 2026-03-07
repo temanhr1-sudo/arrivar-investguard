@@ -274,9 +274,62 @@ export default function App() {
     if (j)    setJournal(j)
   }
 
+  // ── IDX: Fetch ALL emiten (all ~900 stocks) ──────────────
+  const loadAllEmiten = useCallback(async () => {
+    try {
+      const res = await fetch(
+        "https://idx.co.id/umbraco/Surface/StockData/GetSecuritiesStock?code=&sector=&board=&start=0&length=800",
+        { headers:{"User-Agent":"Mozilla/5.0","Referer":"https://www.idx.co.id/"}, signal:AbortSignal.timeout(12000) }
+      )
+      if (res.ok) {
+        const data = await res.json()
+        const list = (data?.data||[]).map(item=>({ code:(item.Code||"").toUpperCase(), name:item.Name||"" })).filter(x=>x.code)
+        if (list.length>0) { setAllEmiten(list); setEmitenLoaded(true); return list }
+      }
+    } catch(e) { console.warn("loadAllEmiten:", e.message) }
+    return []
+  }, [])
+
+  // ── Screener: upgrade to use all IDX stocks ───────────────
+  const loadAllIDXScreener = useCallback(async () => {
+    setSyncing(true)
+    // Step 1: get all emiten list from IDX
+    let emitenList = allEmiten
+    if (!emitenLoaded) { emitenList = await loadAllEmiten() }
+    // Step 2: fetch prices via Yahoo for all codes in batches
+    // Yahoo can handle ~50 codes at a time via existing fetchBatchLiveQuotes
+    const allCodes = emitenList.map(e=>e.code)
+    const nameMap  = {}; emitenList.forEach(e=>{ nameMap[e.code]=e.name })
+    // Batch: 50 per call
+    const BATCH = 50
+    const allResults = {}
+    for (let i=0; i<Math.min(allCodes.length, 300); i+=BATCH) {  // cap at 300 for perf
+      const batch = allCodes.slice(i, i+BATCH)
+      try {
+        const res = await fetchBatchLiveQuotes(batch)
+        Object.assign(allResults, res)
+      } catch(e) { console.warn("batch screener:", e) }
+      if (i+BATCH < allCodes.length) await new Promise(r=>setTimeout(r,200))
+    }
+    // Enrich names from IDX list
+    for (const code of Object.keys(allResults)) {
+      if (nameMap[code] && !allResults[code].n) allResults[code].n = nameMap[code]
+    }
+    const arr = Object.values(allResults)
+    if (arr.length > 0) {
+      setScreenerData(arr)
+      const dict={}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
+      setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
+      notify(`✓ ${arr.length} saham IDX dimuat`,"green")
+    } else { notify("Gagal memuat data pasar","red") }
+    setSyncing(false)
+  }, [allEmiten, emitenLoaded, loadAllEmiten, notify])
+
+  // ref to avoid circular dep: loadScreener <-> loadAllIDXScreener
+  const loadAllIDXScreenerRef = React.useRef(null)
+
   const loadScreener = useCallback(async () => {
     setSyncing(true)
-    // First load POPULAR_IDX_SYMBOLS for quick initial load
     const data = await fetchBatchLiveQuotes(POPULAR_IDX_SYMBOLS)
     const arr = Object.values(data)
     if (arr.length > 0) {
@@ -284,11 +337,11 @@ export default function App() {
       const dict = {}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
       setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
       notify(`✓ ${arr.length} saham populer dimuat`,"green")
-      // Then expand to all IDX stocks in background
-      loadAllIDXScreener()
+      // kick off full IDX load via ref (avoids circular dep)
+      setTimeout(() => { if (loadAllIDXScreenerRef.current) loadAllIDXScreenerRef.current() }, 500)
     } else { notify("Gagal memuat data pasar","red") }
     setSyncing(false)
-  }, [notify, loadAllIDXScreener])
+  }, [notify])
 
   useEffect(() => { if (session && !screenerLoaded) loadScreener() }, [session, screenerLoaded, loadScreener])
 
@@ -394,57 +447,6 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   useEffect(() => {
     if (pushEnabled && Object.keys(liveCache).length>0 && portfolio.length>0) checkAlerts()
   }, [liveCache, pushEnabled, checkAlerts])
-
-  // ── IDX: Fetch ALL emiten (all ~900 stocks) ──────────────
-  const loadAllEmiten = useCallback(async () => {
-    try {
-      const res = await fetch(
-        "https://idx.co.id/umbraco/Surface/StockData/GetSecuritiesStock?code=&sector=&board=&start=0&length=800",
-        { headers:{"User-Agent":"Mozilla/5.0","Referer":"https://www.idx.co.id/"}, signal:AbortSignal.timeout(12000) }
-      )
-      if (res.ok) {
-        const data = await res.json()
-        const list = (data?.data||[]).map(item=>({ code:(item.Code||"").toUpperCase(), name:item.Name||"" })).filter(x=>x.code)
-        if (list.length>0) { setAllEmiten(list); setEmitenLoaded(true); return list }
-      }
-    } catch(e) { console.warn("loadAllEmiten:", e.message) }
-    return []
-  }, [])
-
-  // ── Screener: upgrade to use all IDX stocks ───────────────
-  const loadAllIDXScreener = useCallback(async () => {
-    setSyncing(true)
-    // Step 1: get all emiten list from IDX
-    let emitenList = allEmiten
-    if (!emitenLoaded) { emitenList = await loadAllEmiten() }
-    // Step 2: fetch prices via Yahoo for all codes in batches
-    // Yahoo can handle ~50 codes at a time via existing fetchBatchLiveQuotes
-    const allCodes = emitenList.map(e=>e.code)
-    const nameMap  = {}; emitenList.forEach(e=>{ nameMap[e.code]=e.name })
-    // Batch: 50 per call
-    const BATCH = 50
-    const allResults = {}
-    for (let i=0; i<Math.min(allCodes.length, 300); i+=BATCH) {  // cap at 300 for perf
-      const batch = allCodes.slice(i, i+BATCH)
-      try {
-        const res = await fetchBatchLiveQuotes(batch)
-        Object.assign(allResults, res)
-      } catch(e) { console.warn("batch screener:", e) }
-      if (i+BATCH < allCodes.length) await new Promise(r=>setTimeout(r,200))
-    }
-    // Enrich names from IDX list
-    for (const code of Object.keys(allResults)) {
-      if (nameMap[code] && !allResults[code].n) allResults[code].n = nameMap[code]
-    }
-    const arr = Object.values(allResults)
-    if (arr.length > 0) {
-      setScreenerData(arr)
-      const dict={}; arr.forEach(i=>{ dict[i.c]=i }); setLiveCache(p=>({...p,...dict}))
-      setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
-      notify(`✓ ${arr.length} saham IDX dimuat`,"green")
-    } else { notify("Gagal memuat data pasar","red") }
-    setSyncing(false)
-  }, [allEmiten, emitenLoaded, loadAllEmiten, notify])
 
   // ── Corp Actions: load from IDX + fallback data ───────────
   const CORP_FALLBACK = [
