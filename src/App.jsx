@@ -322,9 +322,9 @@ export default function App() {
           const dict = {}
           arr.forEach(s => { dict[s.c] = s })
           setLiveCache(p => ({ ...p, ...dict }))
-          setLastSync(json.updated || ts)
+          setLastSync(getCurrentTimeString())
           setScreenerLoaded(true)
-          notify(`✓ ${arr.length} saham IDX (${json.updated || ts})`, "green")
+          notify(`✓ ${arr.length} saham IDX (data ${json.updated || ts})`, "green")
           setSyncing(false)
           return
         }
