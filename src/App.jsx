@@ -565,11 +565,25 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
     try {
       if (isLogin) {
         const { error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) throw error
+        if (error) {
+          const msg = error.message?.toLowerCase() || ""
+          if (msg.includes("invalid") || msg.includes("credentials") || msg.includes("not confirmed")) {
+            throw new Error("Login gagal. Pastikan email sudah diverifikasi (cek inbox/spam) dan password benar.")
+          }
+          throw error
+        }
       } else {
-        const { error } = await supabase.auth.signUp({ email, password })
+        if (password.length < 6) { notify("Password minimal 6 karakter","amber"); setAuthLoad(false); return }
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin + "/",
+          }
+        })
         if (error) throw error
-        notify("Akun dibuat! Silakan masuk.","green"); setIsLogin(true)
+        notify("✉️ Link verifikasi dikirim ke email kamu. Cek inbox/spam lalu klik link untuk aktivasi.","green")
+        setIsLogin(true)
       }
     } catch(e) { notify(e.message,"red") }
     setAuthLoad(false)
