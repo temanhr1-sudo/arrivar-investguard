@@ -25,7 +25,7 @@ const QUOTES_BIG_WIN = [
   ["Momentum dan fundamental bertemu — itulah sweet spot yang kamu temukan.", "William O'Neil"],
 ]
 const QUOTES_BIG_LOSS = [
-  ["Kerugian besar mengajarkan apa yang profit tidak pernah bisa ajarkan. Dengarkan pesannya, jangan hanya hitung nominalnya.", "Jesse Livermore"],
+  ["Kerugian besar mengajarkan apa yang profit tidak pernah bisa ajarkan. Dengarkan pesannya.", "Jesse Livermore"],
   ["Setelah badai terbesar, selalu ada fajar. Evaluasi, jangan kabur dari kenyataan.", "Ray Dalio"],
   ["Satu transaksi buruk tidak mendefinisikan karirmu. Tapi bagaimana kamu meresponsnya, iya.", "Mark Douglas"],
 ]
@@ -66,7 +66,7 @@ import {
   LayoutDashboard, Search, BookOpen, BarChart2, TrendingUp, Lightbulb,
   Plus, Download, LogOut, X, ArrowUpRight, ArrowDownRight,
   Wallet, AlertTriangle, Target, PieChart, Trophy, Landmark,
-  ShieldCheck, Info, Filter, Sun, Moon, CheckCircle,
+  ShieldCheck, Shield, Info, Filter, Sun, Moon, CheckCircle,
   DollarSign, Activity, TrendingDown, BarChart, Percent,
   RefreshCw, Bell, BellOff, Calendar as CalendarIcon, Crown, Lock, Zap, ChevronLeft, ChevronRight,
 } from "lucide-react"
@@ -648,16 +648,16 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
   const loadCorpActions = useCallback(async () => {
     setCorpLoading(true)
-    // Tampilkan semua event: past 30 hari + future 6 bulan
     const past30   = new Date(Date.now()-30*86400000).toISOString().slice(0,10)
     const future6m = new Date(Date.now()+180*86400000).toISOString().slice(0,10)
+    // IDX blocks direct fetch via CORS on production — route through allorigins proxy
+    const idxUrl   = `https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=300&type=&startDate=${past30}&endDate=${future6m}`
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(idxUrl)}`
     try {
-      const res = await fetch(
-        `https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=300&type=&startDate=${past30}&endDate=${future6m}`,
-        { headers:{"User-Agent":"Mozilla/5.0","Referer":"https://www.idx.co.id/"}, signal:AbortSignal.timeout(10000) }
-      )
+      const res = await fetch(proxyUrl, { signal:AbortSignal.timeout(12000) })
       if (res.ok) {
-        const data = await res.json()
+        const wrapper = await res.json()
+        const data    = JSON.parse(wrapper.contents || "{}")
         const rows = (data?.data||[]).map(item=>({
           code:       (item.EfectCode||item.StockCode||"").toUpperCase().trim(),
           name:       item.CompanyName||item.Name||"",
