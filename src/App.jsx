@@ -1,3 +1,66 @@
+// ── JournalQuote: static motivasi berdasarkan konteks transaksi ─────
+const QUOTES_WIN = [
+  ["Profit bukan keberuntungan, tapi bukti bahwa proses dan disiplinmu bekerja.", "Peter Lynch"],
+  ["Jual saat semua orang serakah. Kamu sudah membuktikannya hari ini.", "Warren Buffett"],
+  ["Trader terbaik bukan yang paling sering menang, tapi yang paling konsisten dengan plannya.", "Mark Douglas"],
+  ["Setiap profit adalah upah dari kesabaran dan keberanian mengambil keputusan.", "George Soros"],
+  ["Biarkan keuntungan berlari, potong kerugian cepat. Kamu baru saja melakukannya.", "Ed Seykota"],
+  ["Sukses di pasar saham dimulai dari memahami diri sendiri, bukan hanya memahami sahamnya.", "Jesse Livermore"],
+  ["Disiplin adalah jembatan antara tujuan dan pencapaian.", "Jim Rohn"],
+  ["Tidak semua orang berani hold dan exit di waktu yang tepat. Selamat.", "Nicolas Darvas"],
+]
+const QUOTES_LOSS = [
+  ["Kerugian adalah biaya pendidikan terbaik di pasar modal. Bayar, pelajari, lanjutkan.", "George Soros"],
+  ["Setiap trader hebat pernah rugi. Bedanya mereka bangkit dan tidak mengulangi kesalahan yang sama.", "Paul Tudor Jones"],
+  ["Pasar tidak salah. Pasar selalu benar. Tugasmu adalah belajar membacanya.", "Jesse Livermore"],
+  ["Cut loss bukan kekalahan, itu manajemen risiko. Kamu melindungi modal untuk hari esok.", "Mark Minervini"],
+  ["Yang membunuh trader bukan satu kerugian besar, tapi tidak mau belajar dari kerugian kecil.", "Ed Seykota"],
+  ["Jaga modalmu. Peluang berikutnya selalu datang bagi mereka yang masih punya amunisi.", "Warren Buffett"],
+  ["Kesalahan adalah data. Analisis, koreksi, dan jadikan modal keputusan berikutnya.", "Ray Dalio"],
+  ["Trader yang bertahan adalah mereka yang bisa menerima kekalahan tanpa menghancurkan diri sendiri.", "Van Tharp"],
+]
+const QUOTES_BIG_WIN = [
+  ["Return besar datang dari riset dalam, konviksi kuat, dan kesabaran baja.", "Peter Lynch"],
+  ["Ketika semua orang takut dan kamu berani, itulah momen terbaik lahir.", "Warren Buffett"],
+  ["Momentum dan fundamental bertemu — itulah sweet spot yang kamu temukan.", "William O'Neil"],
+]
+const QUOTES_BIG_LOSS = [
+  ["Kerugian besar mengajarkan apa yang profit tidak pernah bisa ajarkan. Dengarkan pesannya.", "Jesse Livermore"],
+  ["Setelah badai terbesar, selalu ada fajar. Evaluasi, jangan kabur dari kenyataan.", "Ray Dalio"],
+  ["Satu transaksi buruk tidak mendefinisikan karirmu. Tapi bagaimana kamu meresponsnya, iya.", "Mark Douglas"],
+]
+
+function JournalQuote({ row, pnl, note, theme: T }) {
+  const isWin  = pnl > 0
+  const pct    = row.avg_price > 0 ? Math.abs(((row.close_price - row.avg_price) / row.avg_price) * 100) : 0
+  const isBig  = pct >= 15
+
+  // Seed dari ID transaksi agar quote konsisten per row tapi bervariasi antar row
+  const seed   = (row.id || "").split("").reduce((a,c)=>a+c.charCodeAt(0),0)
+  let pool
+  if (isWin && isBig)       pool = QUOTES_BIG_WIN
+  else if (!isWin && isBig) pool = QUOTES_BIG_LOSS
+  else if (isWin)           pool = QUOTES_WIN
+  else                      pool = QUOTES_LOSS
+  const [text, author] = pool[seed % pool.length]
+
+  const accent    = isWin ? T.green : T.red
+  const accentBg  = isWin ? T.gBg   : T.rBg
+  const accentBdr = isWin ? T.gBdr  : T.rBdr
+
+  return (
+    <div style={{ background:accentBg, border:`1px solid ${accentBdr}`, borderRadius:10, padding:"11px 14px", marginTop:0 }}>
+      <div style={{ fontSize:9, fontWeight:800, color:accent, marginBottom:5, letterSpacing:"0.5px" }}>
+        {isWin ? "🏆 WISDOM PEMENANG" : "📖 PELAJARAN DARI PASAR"}
+      </div>
+      <div style={{ fontSize:12, color:T.t1, lineHeight:1.65, fontStyle:"italic" }}>
+        "{text}"
+      </div>
+      <div style={{ fontSize:10, fontWeight:700, color:accent, marginTop:5 }}>— {author}</div>
+    </div>
+  )
+}
+
 import React, { useState, useEffect, useCallback, createContext, useContext, useRef } from "react"
 import {
   LayoutDashboard, Search, BookOpen, BarChart2, TrendingUp,
@@ -68,6 +131,7 @@ function formatHarga(val) {
   // Tampilkan dengan desimal, format ID (koma sebagai desimal)
   return new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(rounded)
 }
+
 
 // ── Dividend Yield statis (sumber: laporan dividen FY2024-2025) ──
 const STATIC_DY = {
@@ -280,10 +344,16 @@ export default function App() {
   const [addStock,  setAddStock]  = useState(null)
   const [buyLot,    setBuyLot]    = useState("")
   const [buyPrice,  setBuyPrice]  = useState("")
+  const [buyNote,   setBuyNote]   = useState("")
   const [sellModal, setSellModal] = useState(false)
   const [sellStock, setSellStock] = useState(null)
   const [sellLot,   setSellLot]   = useState("")
   const [sellPrice, setSellPrice] = useState("")
+  const [sellNote,  setSellNote]  = useState("")
+  const [editModal, setEditModal] = useState(false)
+  const [editPos,   setEditPos]   = useState(null)
+  const [editAvg,   setEditAvg]   = useState("")
+  const [editLot,   setEditLot]   = useState("")
   const [topupModal,setTopupModal]= useState(false)
   const [topupVal,  setTopupVal]  = useState("")
   const [email,     setEmail]     = useState("")
@@ -710,9 +780,9 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         await supabase.from("portfolio").insert([{ user_id:session.user.id,stock_code:code,sector:addStock?.s||"IDX",lot,shares,avg_price:price,close_price:price }])
       }
       const jAlloc=capital>0?rp((cost/capital)*100):0
-      const { error: journalErr } = await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,pos_val:cost,cur_val:cost,pnl:0,pnl_pct:0,alloc_pct:jAlloc,suggestions:JSON.stringify([{t:"blue",msg:"BUY "+lot+"lot@"+price}]) }])
+      const { error: journalErr } = await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,pos_val:cost,cur_val:cost,pnl:0,pnl_pct:0,alloc_pct:jAlloc,suggestions:JSON.stringify([{t:"blue",msg:"BUY "+lot+"lot@"+price},{t:"note",msg:buyNote.trim()||"—"}]) }])
       if (journalErr) { notify("Jurnal error: "+journalErr.message,"red"); console.error("Journal BUY error:",journalErr); return }
-      await loadData(session.user.id); setAddModal(false); setBuyLot(""); setBuyPrice("")
+      await loadData(session.user.id); setAddModal(false); setBuyLot(""); setBuyPrice(""); setBuyNote("")
       setTab("portfolio"); notify(`✅ Beli ${code} ${lot} lot sukses!`,"green")
     } catch(e) { console.error("handleBuy error:",e); notify("Gagal: "+e.message,"red") }
   }
@@ -742,10 +812,10 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         pnl:Math.round(realizedPnlThisTrade),
         pnl_pct:sellStock.avg_price>0?Math.round(((price-sellStock.avg_price)/sellStock.avg_price)*10000)/100:0,
         alloc_pct:sAlloc,
-        suggestions:JSON.stringify([{t:realizedPnlThisTrade>=0?"green":"red",msg:"SELL "+lot+"lot@"+price+"|pnl:"+Math.round(realizedPnlThisTrade)}])
+        suggestions:JSON.stringify([{t:realizedPnlThisTrade>=0?"green":"red",msg:"SELL "+lot+"lot@"+price+"|pnl:"+Math.round(realizedPnlThisTrade)},{t:"note",msg:sellNote.trim()||"—"}])
       }])
       if (sellJournalErr) { notify("Jurnal error: "+sellJournalErr.message,"red"); console.error("Journal SELL error:",sellJournalErr); return }
-      await loadData(session.user.id); setSellModal(false); setSellLot(""); setSellPrice("")
+      await loadData(session.user.id); setSellModal(false); setSellLot(""); setSellPrice(""); setSellNote("")
       notify(`P&L: ${realizedPnlThisTrade>=0?"+":""}Rp ${formatRupiah(realizedPnlThisTrade)}`, realizedPnlThisTrade>=0?"green":"red")
     } catch(e) { console.error("handleSell error:",e); notify("Gagal: "+e.message,"red") }
   }
@@ -758,6 +828,22 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   const cash       = Math.max(0, capital - invested)
   const cashPct    = capital>0 ? (cash/capital)*100 : 100
   const totalEquity= capital + unrealPnL
+  const handleEdit = async () => {
+    const newAvgP = parsePrice(editAvg)
+    const newLot  = parseInt(editLot)
+    if (!newAvgP || !newLot) { notify("Isi avg price dan lot","amber"); return }
+    try {
+      await supabase.from("portfolio").update({
+        avg_price: newAvgP,
+        lot:       newLot,
+        shares:    newLot * 100,
+      }).eq("id", editPos.id)
+      await loadData(session.user.id)
+      setEditModal(false); setEditPos(null)
+      notify(`✅ Posisi ${editPos.stock_code} diperbarui`, "green")
+    } catch(e) { notify("Gagal: "+e.message, "red") }
+  }
+
   const _jType=(j,t)=>{try{return JSON.parse(j.suggestions||"[]").some(x=>x.msg?.toUpperCase().startsWith(t))}catch{return false}}
   const realizedPnL= journal.filter(j=>_jType(j,"SELL")).reduce((s,j)=>s+Number(j.pnl||0),0)
   const totalBuy   = journal.filter(j=>_jType(j,"BUY")).length
@@ -1174,8 +1260,9 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                         <div style={{ background:T.bg2,borderRadius:9,padding:"8px 12px",marginBottom:12 }}><div style={{ fontSize:10,color:T.t2 }}>Hold — tunggu level TP atau Avg.</div></div>
                       )}
                     </div>
-                    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderTop:`1px solid ${T.bdr}` }}>
+                    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",borderTop:`1px solid ${T.bdr}` }}>
                       <button onClick={()=>{ setSellStock(pos); setSellPrice(String(rp(live))); setSellModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">Jual</button>
+                      <button onClick={()=>{ setEditPos(pos); setEditAvg(String(pos.avg_price)); setEditLot(String(pos.lot)); setEditModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.t2,cursor:"pointer" }} className="tap">Edit</button>
                       <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Tambah</button>
                     </div>
                   </div>
@@ -1337,35 +1424,51 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 TOPUP: { label:"TOP UP", col:T.blue,  bg:T.lBg, bdr:T.lBdr, Icon:Plus },
               }[rowType] || { label:rowType, col:T.t2, bg:T.bg2, bdr:T.bdr, Icon:Activity }
               const { label, col, bg, bdr, Icon: RIcon } = typeConf
-              return (
-                <div key={row.id} className="fu" style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:18,marginBottom:10,animationDelay:`${i*0.02}s` }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
-                    <div style={{ display:"flex",gap:10,alignItems:"center" }}>
-                      {/* Aksi badge yang jelas */}
-                      <div style={{ background:bg,border:`1px solid ${bdr}`,borderRadius:10,padding:"7px 14px",display:"flex",alignItems:"center",gap:6,minWidth:90,justifyContent:"center" }}>
-                        <RIcon size={14} color={col}/>
-                        <span style={{ fontSize:12,fontWeight:900,color:col,letterSpacing:"0.5px" }}>{label}</span>
+              return (()=>{
+                  const note = _sg().find(x=>x.t==="note")?.msg
+                  const hasNote = note && note !== "—"
+                  return (
+                  <div key={row.id} className="fu" style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:18,marginBottom:10,animationDelay:`${i*0.02}s` }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14 }}>
+                      <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                        <div style={{ background:bg,border:`1px solid ${bdr}`,borderRadius:10,padding:"7px 14px",display:"flex",alignItems:"center",gap:6,minWidth:90,justifyContent:"center" }}>
+                          <RIcon size={14} color={col}/>
+                          <span style={{ fontSize:12,fontWeight:900,color:col,letterSpacing:"0.5px" }}>{label}</span>
+                        </div>
+                        <span style={{ fontSize:17,fontWeight:900,color:T.t1 }}>{row.stock_code}</span>
                       </div>
-                      <span style={{ fontSize:17,fontWeight:900,color:T.t1 }}>{row.stock_code}</span>
+                      <span style={{ fontSize:11,fontWeight:600,color:T.t3 }}>{row.date}</span>
                     </div>
-                    <span style={{ fontSize:11,fontWeight:600,color:T.t3 }}>{row.date}</span>
+
+                    {/* Metrics */}
+                    <div style={{ background:T.bg2,padding:"12px 16px",borderRadius:14,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom: hasNote||isSell?10:0 }}>
+                      <div>
+                        <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isTopup?"NOMINAL":"LOT × HARGA"}</div>
+                        <div style={{ fontSize:13,fontWeight:700,color:T.t1 }}>
+                          {isTopup ? `Rp ${formatRupiah(row.pos_val||0)}` : `${row.lot} Lot @ Rp ${formatHarga(row.close_price)}`}
+                        </div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isSell?"REALIZED P&L":"TOTAL NILAI"}</div>
+                        <div style={{ fontSize:15,fontWeight:900,color:isSell?getProfitColor(row.pnl,T):isTopup?T.blue:T.t1 }}>
+                          {isSell ? `${(row.pnl||0)>=0?"+":""}Rp ${formatHarga(row.pnl||0)}` : `Rp ${formatRupiahCompact(row.pos_val||(row.lot*100*row.close_price))}`}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* User note */}
+                    {hasNote && (
+                      <div style={{ background:T.bg0,border:`1px solid ${T.bdr}`,borderRadius:10,padding:"10px 12px",marginBottom:isSell?10:0 }}>
+                        <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:4,letterSpacing:"0.5px" }}>💭 ALASAN {isSell?"JUAL":"BELI"}</div>
+                        <div style={{ fontSize:12,color:T.t2,lineHeight:1.6,fontStyle:"italic" }}>"{note}"</div>
+                      </div>
+                    )}
+
+                    {/* AI Quote — hanya untuk transaksi SELL */}
+                    {isSell && <JournalQuote row={row} pnl={row.pnl||0} note={note} theme={T} isDark={isDark}/>}
                   </div>
-                  <div style={{ background:T.bg2,padding:"12px 16px",borderRadius:14,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
-                    <div>
-                      <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isTopup?"NOMINAL":"LOT × HARGA"}</div>
-                      <div style={{ fontSize:13,fontWeight:700,color:T.t1 }}>
-                        {isTopup ? `Rp ${formatRupiah(row.pos_val||0)}` : `${row.lot} Lot @ Rp ${formatRupiah(row.close_price)}`}
-                      </div>
-                    </div>
-                    <div style={{ textAlign:"right" }}>
-                      <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isSell?"REALIZED P&L":"TOTAL NILAI"}</div>
-                      <div style={{ fontSize:15,fontWeight:900,color:isSell?getProfitColor(row.pnl,T):isTopup?T.blue:T.t1 }}>
-                        {isSell ? `${(row.pnl||0)>=0?"+":""}Rp ${formatRupiah(row.pnl||0)}` : `Rp ${formatRupiahCompact(row.pos_val||(row.lot*100*row.close_price))}`}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
+                  )
+                })()
             })}
           </div>
         )}
@@ -1816,7 +1919,41 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               </div>
             )
           })()}
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11,fontWeight:800,color:T.t3,marginBottom:8,letterSpacing:"0.5px" }}>ALASAN BELI (opsional)</div>
+            <textarea
+              value={buyNote} onChange={e=>setBuyNote(e.target.value)}
+              placeholder="Contoh: Breakout dari MA50, volume tinggi, fundamental kuat..."
+              rows={3}
+              style={{ width:"100%",background:T.bg2,border:`1px solid ${T.bdr2}`,borderRadius:12,padding:"10px 12px",
+                color:T.t1,fontSize:13,resize:"none",outline:"none",fontFamily:"inherit",lineHeight:1.5,
+                boxSizing:"border-box" }}
+            />
+          </div>
           <Btn full onClick={handleBuy}>Eksekusi Pembelian</Btn>
+        </Modal>
+
+        {/* ══ EDIT POSISI MODAL ══ */}
+        <Modal open={editModal} onClose={()=>setEditModal(false)} title={`Edit Posisi ${editPos?.stock_code}`} subtitle="Koreksi data avg price atau jumlah lot">
+          <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:14,padding:"12px 16px",marginBottom:20 }}>
+            <div style={{ fontSize:11,fontWeight:800,color:T.red,marginBottom:4 }}>⚠ PERHATIAN</div>
+            <div style={{ fontSize:12,color:T.red,lineHeight:1.5 }}>Fitur ini untuk koreksi data (misalnya average kurang tepat). Ini TIDAK mencatat transaksi baru di jurnal.</div>
+          </div>
+          <div style={{ background:T.bg2,borderRadius:14,padding:"12px 16px",marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+            <div><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>AVG SAAT INI</div><div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>Rp {formatHarga(editPos?.avg_price)}</div></div>
+            <div style={{ textAlign:"right" }}><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>LOT SAAT INI</div><div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>{editPos?.lot} Lot</div></div>
+          </div>
+          <Input label="AVG PRICE BARU (Rp)" type="number" prefix="Rp" value={editAvg} onChange={e=>setEditAvg(e.target.value)}/>
+          <Input label="JUMLAH LOT BARU" type="number" value={editLot} onChange={e=>setEditLot(e.target.value)}/>
+          {editAvg && editLot && (
+            <div style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,borderRadius:14,padding:"12px 16px",marginBottom:16 }}>
+              <div style={{ display:"flex",justifyContent:"space-between" }}>
+                <span style={{ fontSize:12,color:T.t3 }}>Modal baru</span>
+                <span style={{ fontSize:14,fontWeight:800,color:T.t1 }}>Rp {new Intl.NumberFormat("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}).format(rp(parseInt(editLot)*100*parsePrice(editAvg)))}</span>
+              </div>
+            </div>
+          )}
+          <Btn full onClick={handleEdit}>Simpan Perubahan</Btn>
         </Modal>
 
         <Modal open={sellModal} onClose={()=>setSellModal(false)} title={`Jual ${sellStock?.stock_code}`} subtitle="Amankan Profit atau Cut Loss sesuai Trading Plan">
@@ -1852,6 +1989,17 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               </div>
             </>)
           })()}
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:11,fontWeight:800,color:T.t3,marginBottom:8,letterSpacing:"0.5px" }}>ALASAN JUAL (opsional)</div>
+            <textarea
+              value={sellNote} onChange={e=>setSellNote(e.target.value)}
+              placeholder="Contoh: Target TP1 tercapai, atau cut loss sesuai plan..."
+              rows={3}
+              style={{ width:"100%",background:T.bg2,border:`1px solid ${T.bdr2}`,borderRadius:12,padding:"10px 12px",
+                color:T.t1,fontSize:13,resize:"none",outline:"none",fontFamily:"inherit",lineHeight:1.5,
+                boxSizing:"border-box" }}
+            />
+          </div>
           <Btn variant="danger" full onClick={handleSell}>Konfirmasi Penjualan</Btn>
         </Modal>
       </div>
