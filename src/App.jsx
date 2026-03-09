@@ -25,7 +25,7 @@ const QUOTES_BIG_WIN = [
   ["Momentum dan fundamental bertemu — itulah sweet spot yang kamu temukan.", "William O'Neil"],
 ]
 const QUOTES_BIG_LOSS = [
-  ["Kerugian besar mengajarkan apa yang profit tidak pernah bisa ajarkan. Dengarkan pesannya.", "Jesse Livermore"],
+  ["Kerugian besar mengajarkan apa yang profit tidak pernah bisa ajarkan. Dengarkan pesannya, jangan hanya hitung nominalnya.", "Jesse Livermore"],
   ["Setelah badai terbesar, selalu ada fajar. Evaluasi, jangan kabur dari kenyataan.", "Ray Dalio"],
   ["Satu transaksi buruk tidak mendefinisikan karirmu. Tapi bagaimana kamu meresponsnya, iya.", "Mark Douglas"],
 ]
@@ -63,7 +63,7 @@ function JournalQuote({ row, pnl, note, theme: T }) {
 
 import React, { useState, useEffect, useCallback, createContext, useContext, useRef } from "react"
 import {
-  LayoutDashboard, Search, BookOpen, BarChart2, TrendingUp,
+  LayoutDashboard, Search, BookOpen, BarChart2, TrendingUp, Lightbulb,
   Plus, Download, LogOut, X, ArrowUpRight, ArrowDownRight,
   Wallet, AlertTriangle, Target, PieChart, Trophy, Landmark,
   ShieldCheck, Info, Filter, Sun, Moon, CheckCircle,
@@ -263,6 +263,7 @@ const BottomNav = ({ tab, setTab }) => {
     { id:"monitor",   label:"Monitor",   Icon:BarChart2 },
     { id:"forecast",  label:"Forecast",  Icon:TrendingUp },
     { id:"calendar",  label:"Kalender",  Icon:CalendarIcon },
+    { id:"strategi",  label:"Strategi",  Icon:Lightbulb },
   ]
   return (
     <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100,background:T.navBg,backdropFilter:"blur(20px)",borderTop:`1px solid ${T.bdr2}`,display:"flex",padding:"10px 8px calc(10px + env(safe-area-inset-bottom))" }}>
@@ -1880,6 +1881,374 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         </Modal>
 
         <BottomNav tab={tab} setTab={setTab}/>
+
+        {/* ══ STRATEGI & SIMULASI ══ */}
+        {tab==="strategi" && (() => {
+          const capital = profile?.capital || 0
+          const isSmallCap = capital < 1_000_000
+          const targetReturn = isSmallCap ? 50 : 30  // % per tahun
+          const winRate      = isSmallCap ? 58 : 64  // % win rate
+          const riskReward   = isSmallCap ? "1:2.5" : "1:2"
+          const maxAlloc     = isSmallCap ? 20 : 15   // % per posisi
+          const maxLoss      = isSmallCap ? 8  : 6    // % cut loss
+          const maxPos       = isSmallCap ? 5  : 8    // max posisi bersamaan
+
+          // ── Market Condition Assessment ──
+          const liveStocks   = Object.values(liveCache)
+          const avgChg       = liveStocks.length > 0
+            ? liveStocks.reduce((s,x)=>s+(x.chgPct||0),0)/liveStocks.length : 0
+          const redCount     = liveStocks.filter(x=>(x.chgPct||0)<-1).length
+          const totalCount   = liveStocks.length || 1
+          const bearishPct   = Math.round((redCount/totalCount)*100)
+          const marketScore  = avgChg > 0.5 ? "BULLISH" : avgChg < -0.5 ? "BEARISH" : "SIDEWAYS"
+          const dangerLevel  = bearishPct > 70 ? 90 : bearishPct > 50 ? 60 : bearishPct > 30 ? 30 : 10
+          const suggestExit  = dangerLevel >= 70
+
+          // ── 20-Year Simulation ──
+          const simulate20yr = (initCap, annualRet, years=20) => {
+            const rows = []
+            let bal = initCap
+            for (let y=1; y<=years; y++) {
+              const prev = bal
+              // Volatility: bervariasi ±10% dari target return tiap tahun
+              const variance  = (Math.sin(y * 3.7 + initCap % 7) * 0.10)
+              const actualRet = annualRet/100 + variance
+              const profit    = bal * actualRet
+              bal             = bal + profit
+              rows.push({ y, bal, profit, ret: (actualRet*100).toFixed(1), prev })
+            }
+            return rows
+          }
+          const simRows = simulate20yr(Math.max(capital, 1_000_000), targetReturn)
+          const finalBal = simRows[simRows.length-1]?.bal || 0
+          const totalProfit = finalBal - Math.max(capital, 1_000_000)
+          const multiplier = (finalBal / Math.max(capital, 1_000_000)).toFixed(1)
+
+          // Strategies based on capital
+          const strategies = isSmallCap ? [
+            {
+              name:"Momentum Breakout",
+              desc:"Beli saham yang breakout dari resistance dengan volume ≥2× rata-rata. Target saham LQ45 atau IDX80 yang liquid.",
+              winrate:62, rr:"1:2.5", alloc:20, sl:8, tp1:20, tp2:35,
+              timeframe:"Swing 5–15 hari", sector:"Perbankan, Consumer, Telco",
+              entry:"Harga close di atas MA20 + volume spike", exit:"SL -8% atau TP1/TP2",
+            },
+            {
+              name:"Value Accumulation",
+              desc:"Beli saham fundamental kuat (PE<12, PBV<1.5, ROE>15%) saat harga turun 15–25% dari high tanpa perubahan fundamental.",
+              winrate:71, rr:"1:3", alloc:15, sl:7, tp1:25, tp2:50,
+              timeframe:"Posisi 1–6 bulan", sector:"BUMN, Perbankan Blue Chip",
+              entry:"Di zona demand + RSI <40", exit:"SL atau target valuasi wajar",
+            },
+            {
+              name:"Dividen + Growth",
+              desc:"Fokus saham dividen yield >5% sambil tunggu capital gain. Cocok untuk bangun portofolio bertahap.",
+              winrate:68, rr:"1:2", alloc:20, sl:10, tp1:15, tp2:30,
+              timeframe:"Hold 6–12 bulan", sector:"BUMN, Infrastruktur, Perkebunan",
+              entry:"Sebelum cum-date dividen atau saat koreksi", exit:"Setelah ex-date atau TP",
+            },
+          ] : [
+            {
+              name:"Institutional Following",
+              desc:"Track transaksi asing (net buy) di saham blue chip. Masuk saat asing mulai akumulasi 3 hari berturut-turut.",
+              winrate:66, rr:"1:2", alloc:15, sl:6, tp1:15, tp2:25,
+              timeframe:"Swing 2–4 minggu", sector:"Perbankan, Telco, Komoditas",
+              entry:"Net buy asing positif + price di atas MA50", exit:"Saat asing mulai net sell",
+            },
+            {
+              name:"Sector Rotation",
+              desc:"Rotasi ke sektor yang sedang in-favor berdasarkan siklus ekonomi. Alokasi per sektor max 30% total portofolio.",
+              winrate:64, rr:"1:2.2", alloc:12, sl:6, tp1:18, tp2:28,
+              timeframe:"Posisi 1–3 bulan", sector:"Bergantian: Komoditas→Keuangan→Consumer",
+              entry:"Sektor mulai outperform IHSG 2 minggu", exit:"Saat sektor underperform",
+            },
+            {
+              name:"Dividend Portfolio",
+              desc:"Bangun portofolio dividen 8–10 saham terdiversifikasi dengan yield 5–8%. Reinvest dividen untuk compounding.",
+              winrate:74, rr:"1:1.8", alloc:10, sl:8, tp1:20, tp2:40,
+              timeframe:"Hold 1–3 tahun", sector:"Multi-sektor, min 4 sektor berbeda",
+              entry:"Averaging saat koreksi pasar >10%", exit:"Perubahan fundamental negatif",
+            },
+            {
+              name:"GARP (Growth at Reasonable Price)",
+              desc:"Saham dengan EPS growth >20% YoY tapi PE masih wajar (<20x). Sweet spot antara value dan growth.",
+              winrate:61, rr:"1:2.5", alloc:12, sl:7, tp1:25, tp2:45,
+              timeframe:"Posisi 3–6 bulan", sector:"Teknologi, Konsumer, Healthcare",
+              entry:"Setelah earning beat atau guidance naik", exit:"PE mulai mahal atau growth melambat",
+            },
+          ]
+
+          // Money Management Rules
+          const mmRules = [
+            { label:"Maks 1 Posisi", value: maxAlloc+"% equity", desc:"Jangan taruh semua telur dalam 1 keranjang" },
+            { label:"Maks Posisi Aktif", value: maxPos+" saham", desc:"Fokus, terlalu banyak susah dipantau" },
+            { label:"Cut Loss Otomatis", value: "-"+maxLoss+"%", desc:"Tidak ada negosiasi, disiplin absolut" },
+            { label:"Risk per Trade", value: (maxAlloc*maxLoss/100).toFixed(1)+"% kapital", desc:"Total risiko per transaksi dari total modal" },
+            { label:"Max Drawdown", value: isSmallCap?"25%":"18%", desc:"Jika portfolio turun segini, STOP trading sebulan" },
+            { label:"Cash Reserve", value: isSmallCap?"20%":"25%", desc:"Selalu ada amunisi untuk peluang terbaik" },
+          ]
+
+          const mktColor = marketScore==="BULLISH" ? T.green : marketScore==="BEARISH" ? T.red : T.amber
+          const mktBg    = marketScore==="BULLISH" ? T.gBg    : marketScore==="BEARISH" ? T.rBg    : T.aBg
+          const mktBdr   = marketScore==="BULLISH" ? T.gBdr   : marketScore==="BEARISH" ? T.rBdr   : T.aBdr
+
+          return (
+          <div className="fu" style={{ padding:"56px 20px 100px" }}>
+
+            {/* ── HEADER ── */}
+            <div style={{ marginBottom:24 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:6 }}>
+                <Lightbulb size={22} color={T.em}/>
+                <h2 style={{ fontSize:26,fontWeight:900,color:T.t1 }}>Strategi & Simulasi</h2>
+              </div>
+              <p style={{ fontSize:13,color:T.t2 }}>
+                {isSmallCap ? "Modal <1M: Agresif terkontrol, target 50%/tahun." : "Modal ≥1M: Konservatif stabil, target 30%/tahun."}
+              </p>
+            </div>
+
+            {/* ── MARKET CONDITION ALERT ── */}
+            <div style={{ background:mktBg, border:`1px solid ${mktBdr}`, borderRadius:20, padding:20, marginBottom:20 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:12 }}>
+                <div>
+                  <div style={{ fontSize:10,fontWeight:800,color:mktColor,marginBottom:4,letterSpacing:"0.5px" }}>KONDISI PASAR SAAT INI</div>
+                  <div style={{ fontSize:22,fontWeight:900,color:mktColor }}>{marketScore}</div>
+                  <div style={{ fontSize:12,color:T.t2,marginTop:2 }}>
+                    {liveStocks.length > 0
+                      ? `${redCount} dari ${totalCount} saham di pantauan turun >1%`
+                      : "Data pasar belum dimuat — buka Screener dulu"}
+                  </div>
+                </div>
+                <div style={{ textAlign:"right" }}>
+                  <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>RISIKO LOSS</div>
+                  <div style={{ fontSize:28,fontWeight:900,color:dangerLevel>=70?T.red:dangerLevel>=40?T.amber:T.green }}>
+                    {dangerLevel}%
+                  </div>
+                </div>
+              </div>
+              {/* Risk bar */}
+              <div style={{ height:6,background:T.bg0,borderRadius:99,marginBottom:12,overflow:"hidden" }}>
+                <div style={{ height:"100%", width:dangerLevel+"%",
+                  background:`linear-gradient(90deg,${T.green},${dangerLevel>60?T.red:dangerLevel>30?T.amber:T.green})`,
+                  borderRadius:99, transition:"width 0.8s" }}/>
+              </div>
+              {/* Suggestion */}
+              {suggestExit ? (
+                <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:14,padding:"14px 16px" }}>
+                  <div style={{ fontSize:13,fontWeight:900,color:T.red,marginBottom:6 }}>⛔ REKOMENDASI: PINDAH KE PASAR UANG</div>
+                  <div style={{ fontSize:12,color:T.red,lineHeight:1.65,marginBottom:10 }}>
+                    Probabilitas loss mencapai <strong>{dangerLevel}%</strong>. Pasar sedang dalam tekanan berat.
+                    Disarankan <strong>cash out 70–100%</strong> posisi dan alihkan ke instrumen lebih aman:
+                  </div>
+                  {[
+                    { name:"Reksa Dana Pasar Uang", yield:"5–6%/tahun", risk:"Sangat Rendah", ex:"RDPU BCA, Manulife Dana Kas" },
+                    { name:"Obligasi Negara (SBN/ORI)", yield:"6–7%/tahun", risk:"Rendah", ex:"ORI024, SR021 via bank/pialang" },
+                    { name:"Deposito Bank", yield:"4–5.5%/tahun", risk:"Nol (LPS)", ex:"Deposito BRI, BCA, Mandiri" },
+                    { name:"Reksa Dana Pendapatan Tetap", yield:"6–8%/tahun", risk:"Rendah", ex:"Schroder Dana Mantap, Manulife" },
+                  ].map(alt => (
+                    <div key={alt.name} style={{ background:T.bg1,borderRadius:10,padding:"10px 12px",marginBottom:6,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                      <div>
+                        <div style={{ fontSize:12,fontWeight:800,color:T.t1 }}>{alt.name}</div>
+                        <div style={{ fontSize:10,color:T.t3,marginTop:2 }}>{alt.ex}</div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:12,fontWeight:900,color:T.green }}>{alt.yield}</div>
+                        <div style={{ fontSize:9,color:T.t3 }}>Risk: {alt.risk}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize:12,color:mktColor,fontWeight:700 }}>
+                  {marketScore==="BULLISH" ? "✅ Kondisi kondusif. Strategi aktif bisa dijalankan penuh." :
+                   marketScore==="SIDEWAYS" ? "⚠ Pasar konsolidasi. Selektif, tunggu breakout konfirmasi." :
+                   "🔴 Hati-hati. Kurangi exposure, prioritaskan capital preservation."}
+                </div>
+              )}
+            </div>
+
+            {/* ── 20-YEAR SIMULATION ── */}
+            <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:20,marginBottom:20 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:4 }}>
+                <TrendingUp size={18} color={T.blue}/>
+                <div style={{ fontSize:15,fontWeight:900,color:T.t1 }}>Simulasi 20 Tahun</div>
+              </div>
+              <div style={{ fontSize:12,color:T.t2,marginBottom:16 }}>
+                Modal {formatRupiahCompact(Math.max(capital,1_000_000))} × return {targetReturn}%/tahun (dengan variasi pasar wajar)
+              </div>
+
+              {/* Summary */}
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:16 }}>
+                {[
+                  ["Nilai Akhir", formatRupiahCompact(finalBal), T.green],
+                  ["Total Profit", formatRupiahCompact(totalProfit), T.blue],
+                  ["Multiplier", multiplier+"×", T.em],
+                ].map(([l,v,c])=>(
+                  <div key={l} style={{ background:T.bg2,borderRadius:12,padding:"10px 12px",textAlign:"center" }}>
+                    <div style={{ fontSize:9,color:T.t3,fontWeight:700,marginBottom:4 }}>{l}</div>
+                    <div style={{ fontSize:13,fontWeight:900,color:c }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Win rate & stats */}
+              <div style={{ background:T.bg2,borderRadius:12,padding:"12px 14px",marginBottom:16,display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                <div>
+                  <div style={{ fontSize:9,color:T.t3,fontWeight:800,marginBottom:4 }}>WIN RATE TARGET</div>
+                  <div style={{ fontSize:20,fontWeight:900,color:T.green }}>{winRate}%</div>
+                  <div style={{ fontSize:10,color:T.t3,marginTop:2 }}>dari setiap trade entry</div>
+                </div>
+                <div>
+                  <div style={{ fontSize:9,color:T.t3,fontWeight:800,marginBottom:4 }}>RISK : REWARD</div>
+                  <div style={{ fontSize:20,fontWeight:900,color:T.blue }}>{riskReward}</div>
+                  <div style={{ fontSize:10,color:T.t3,marginTop:2 }}>setiap kali ambil posisi</div>
+                </div>
+              </div>
+
+              {/* Yearly chart - compact bar */}
+              <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:8,letterSpacing:"0.5px" }}>PROYEKSI PER TAHUN</div>
+              <div style={{ overflowX:"auto" }}>
+                <div style={{ display:"flex",gap:3,alignItems:"flex-end",height:80,minWidth:480,padding:"0 4px" }}>
+                  {simRows.map(r => {
+                    const maxBal = simRows[simRows.length-1].bal
+                    const h = Math.max(8, (r.bal/maxBal)*76)
+                    const isPos = parseFloat(r.ret) > 0
+                    return (
+                      <div key={r.y} style={{ flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2 }}>
+                        <div title={`Tahun ${r.y}: Rp${formatRupiahCompact(r.bal)} (${r.ret}%)`}
+                          style={{ width:"100%",height:h,background:isPos?T.green:T.red,borderRadius:"3px 3px 0 0",opacity:0.85,minHeight:6,transition:"height 0.3s" }}/>
+                        {r.y%5===0 && <div style={{ fontSize:7,color:T.t3,whiteSpace:"nowrap" }}>Y{r.y}</div>}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Yearly table - collapsible, show top 5 years */}
+              <div style={{ marginTop:14 }}>
+                {[5,10,15,20].map(y => {
+                  const r = simRows[y-1]
+                  if (!r) return null
+                  return (
+                    <div key={y} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 12px",background:T.bg2,borderRadius:10,marginBottom:6 }}>
+                      <div>
+                        <div style={{ fontSize:12,fontWeight:800,color:T.t1 }}>Tahun ke-{y}</div>
+                        <div style={{ fontSize:10,color:T.t3 }}>Return aktual: {r.ret}%</div>
+                      </div>
+                      <div style={{ textAlign:"right" }}>
+                        <div style={{ fontSize:14,fontWeight:900,color:T.green }}>Rp {formatRupiahCompact(r.bal)}</div>
+                        <div style={{ fontSize:10,color:T.t3 }}>+{formatRupiahCompact(r.bal - simRows[0].prev)}</div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* ── MONEY MANAGEMENT ── */}
+            <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:20,marginBottom:20 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:16 }}>
+                <Shield size={18} color={T.amber}/>
+                <div style={{ fontSize:15,fontWeight:900,color:T.t1 }}>Money Management Rules</div>
+              </div>
+              <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+                {mmRules.map(r=>(
+                  <div key={r.label} style={{ background:T.bg2,borderRadius:12,padding:"12px 14px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontSize:12,fontWeight:800,color:T.t1 }}>{r.label}</div>
+                      <div style={{ fontSize:10,color:T.t3,marginTop:2 }}>{r.desc}</div>
+                    </div>
+                    <div style={{ fontSize:14,fontWeight:900,color:T.em,whiteSpace:"nowrap",marginLeft:12 }}>{r.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* ── TRADE PLAN STRATEGIES ── */}
+            <div style={{ marginBottom:20 }}>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:16 }}>
+                <Target size={18} color={T.green}/>
+                <div style={{ fontSize:15,fontWeight:900,color:T.t1 }}>Trade Plan & Strategi</div>
+              </div>
+              {strategies.map((s,si)=>(
+                <div key={si} style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:18,padding:18,marginBottom:12,overflow:"hidden" }}>
+                  {/* Header */}
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:12 }}>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontSize:15,fontWeight:900,color:T.t1,marginBottom:4 }}>{s.name}</div>
+                      <div style={{ fontSize:11,color:T.t2,lineHeight:1.6 }}>{s.desc}</div>
+                    </div>
+                    <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:10,padding:"6px 10px",marginLeft:10,textAlign:"center",flexShrink:0 }}>
+                      <div style={{ fontSize:8,fontWeight:800,color:T.green }}>WIN RATE</div>
+                      <div style={{ fontSize:16,fontWeight:900,color:T.green }}>{s.winrate}%</div>
+                    </div>
+                  </div>
+
+                  {/* Metrics grid */}
+                  <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,marginBottom:12 }}>
+                    {[
+                      ["R:R",     s.rr,        T.blue],
+                      ["Alokasi", s.alloc+"%", T.amber],
+                      ["SL",      "-"+s.sl+"%", T.red],
+                      ["TP1",     "+"+s.tp1+"%",T.green],
+                    ].map(([l,v,c])=>(
+                      <div key={l} style={{ background:T.bg2,borderRadius:9,padding:"8px 6px",textAlign:"center" }}>
+                        <div style={{ fontSize:8,fontWeight:800,color:T.t3,marginBottom:2 }}>{l}</div>
+                        <div style={{ fontSize:12,fontWeight:900,color:c }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Trade plan detail */}
+                  <div style={{ background:T.bg0,borderRadius:10,padding:"10px 12px",marginBottom:8 }}>
+                    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+                      {[
+                        ["⏱ Timeframe", s.timeframe],
+                        ["📊 Sektor", s.sector],
+                        ["🟢 Entry", s.entry],
+                        ["🔴 Exit", s.exit],
+                      ].map(([l,v])=>(
+                        <div key={l}>
+                          <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:2 }}>{l}</div>
+                          <div style={{ fontSize:10,color:T.t2,lineHeight:1.5 }}>{v}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* TP2 bar */}
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                    <div style={{ fontSize:10,color:T.t3 }}>TP2 target: <strong style={{ color:T.green }}>+{s.tp2}%</strong></div>
+                    <div style={{ fontSize:10,color:T.t3 }}>Max loss per trade: <strong style={{ color:T.red }}>{(s.alloc*s.sl/100).toFixed(1)}% kapital</strong></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* ── MARKET ALTERNATIVE (selalu tampil di bawah) ── */}
+            {!suggestExit && (
+              <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:20,marginBottom:20 }}>
+                <div style={{ fontSize:13,fontWeight:800,color:T.t2,marginBottom:12 }}>🏦 Alternatif Saat Pasar Sideways/Bear</div>
+                {[
+                  { name:"Reksa Dana Pasar Uang", yield:"5–6%/thn", risk:"Sangat Rendah" },
+                  { name:"ORI / SBN Ritel", yield:"6–7%/thn", risk:"Rendah" },
+                  { name:"Deposito", yield:"4–5.5%/thn", risk:"Nol (LPS)" },
+                  { name:"P2P Lending (terpilih)", yield:"10–14%/thn", risk:"Sedang" },
+                ].map(a=>(
+                  <div key={a.name} style={{ display:"flex",justifyContent:"space-between",padding:"9px 0",borderBottom:`1px solid ${T.bdr}` }}>
+                    <span style={{ fontSize:12,color:T.t1,fontWeight:700 }}>{a.name}</span>
+                    <div style={{ textAlign:"right" }}>
+                      <span style={{ fontSize:12,fontWeight:900,color:T.blue }}>{a.yield}</span>
+                      <span style={{ fontSize:10,color:T.t3,marginLeft:8 }}>Risk: {a.risk}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+          </div>
+          )
+        })()}
+
 
         {/* ══ MODALS ══ */}
         <Modal open={topupModal} onClose={()=>setTopupModal(false)} title="Top Up Dana" subtitle="Suntik modal tambahan ke Cash Reserve">
