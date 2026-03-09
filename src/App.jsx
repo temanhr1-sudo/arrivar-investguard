@@ -1129,7 +1129,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                         </div>
                       </div>
                       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:12 }}>
-                        {[["AVG",`Rp ${formatRupiah(pos.avg_price)}`,T.t2],["LIVE",`Rp ${formatRupiah(live)}`,T.em],["MODAL",`Rp ${formatRupiahCompact(posVal)}`,T.t3]].map(([l,v,c])=>(
+                        {[["AVG",`Rp ${formatHarga(pos.avg_price)}`,T.t2],["LIVE",`Rp ${formatHarga(live)}`,T.em],["MODAL",`Rp ${formatRupiahCompact(posVal)}`,T.t3]].map(([l,v,c])=>(
                           <div key={l} style={{ background:T.bg2,borderRadius:10,padding:"8px 10px" }}><div style={{ fontSize:9,color:T.t3,fontWeight:700,marginBottom:2 }}>{l}</div><div style={{ fontSize:11,fontWeight:800,color:c }}>{v}</div></div>
                         ))}
                       </div>
@@ -1138,20 +1138,20 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                         <div style={{ height:4,background:T.bg0,borderRadius:99,overflow:"hidden" }}><div style={{ height:"100%",width:`${Math.min(100,(allocPct/20)*100)}%`,background:over20?T.red:allocPct>15?T.amber:T.em,borderRadius:99,transition:"width 0.6s" }}/></div>
                       </div>
                       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:12 }}>
-                        {[["CUT LOSS -8%","Rp "+formatRupiah(slPrice),T.red,isSL||live<=slPrice],["AVG DOWN -5%","Rp "+formatRupiah(adLevel),T.amber,live<=adLevel],["TP1 +15%","Rp "+formatRupiah(tp1Price),T.green,live>=tp1Price],["TP2 +25%","Rp "+formatRupiah(tp2Price),T.green,live>=tp2Price]].map(([lbl,val,col,hit])=>(
+                        {[["CUT LOSS -8%","Rp "+formatHarga(slPrice),T.red,isSL||live<=slPrice],["AVG DOWN -5%","Rp "+formatHarga(adLevel),T.amber,live<=adLevel],["TP1 +15%","Rp "+formatHarga(tp1Price),T.green,live>=tp1Price],["TP2 +25%","Rp "+formatHarga(tp2Price),T.green,live>=tp2Price]].map(([lbl,val,col,hit])=>(
                           <div key={lbl} style={{ background:hit?`${col}18`:T.bg2,border:`1px solid ${hit?col+"50":T.bdr}`,borderRadius:9,padding:"6px 9px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
                             <span style={{ fontSize:8,fontWeight:800,color:hit?col:T.t3 }}>{lbl}</span><span style={{ fontSize:10,fontWeight:900,color:hit?col:T.t2 }}>{val}</span>
                           </div>
                         ))}
                       </div>
                       {isSL?(
-                        <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:12 }}><div style={{ fontSize:11,fontWeight:800,color:T.red,marginBottom:2 }}>Wajib jual sekarang</div><div style={{ fontSize:10,color:T.red,lineHeight:1.5 }}>Loss {pnlPct.toFixed(1)}% · Rp {formatRupiah(Math.abs(pnlRp))} · Jangan tunggu lebih dalam.</div></div>
+                        <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:12 }}><div style={{ fontSize:11,fontWeight:800,color:T.red,marginBottom:2 }}>Wajib jual sekarang</div><div style={{ fontSize:10,color:T.red,lineHeight:1.5 }}>Loss {pnlPct.toFixed(1)}% · Rp {formatHarga(Math.abs(pnlRp))} · Jangan tunggu lebih dalam.</div></div>
                       ):isAD&&canLot>0&&!over20?(
                         <div style={{ marginBottom:12 }}>
                           <div style={{ background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:7 }}>
                             <div style={{ fontSize:11,fontWeight:800,color:T.blue,marginBottom:5 }}>Bisa Average Down</div>
                             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 10px",fontSize:10 }}>
-                              {[["Maks beli",canLot+" lot (Rp "+formatRupiahCompact(canRp)+")"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["SL baru","Rp "+formatRupiah(newAvg*0.92)]].map(([l,v])=>(
+                              {[["Maks beli",canLot+" lot (Rp "+formatRupiahCompact(canRp)+")"],["Avg baru","Rp "+formatHarga(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["SL baru","Rp "+formatHarga(newAvg*0.92)]].map(([l,v])=>(
                                 <div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.blue }}>{v}</strong></div>
                               ))}
                             </div>
@@ -1165,7 +1165,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                           <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:7 }}>
                             <div style={{ fontSize:11,fontWeight:800,color:T.green,marginBottom:5 }}>Bisa Average Up (+5%)</div>
                             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 10px",fontSize:10 }}>
-                              {[["Maks beli",canLot+" lot"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Biaya","Rp "+formatRupiahCompact(canRp)]].map(([l,v])=>(<div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.green }}>{v}</strong></div>))}
+                              {[["Maks beli",canLot+" lot"],["Avg baru","Rp "+formatHarga(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Biaya","Rp "+formatRupiahCompact(canRp)]].map(([l,v])=>(<div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.green }}>{v}</strong></div>))}
                             </div>
                           </div>
                           <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ width:"100%",background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Avg Up {canLot} lot @ Rp {formatRupiah(live)}</button>
