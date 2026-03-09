@@ -1175,8 +1175,8 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                       )}
                     </div>
                     <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",borderTop:`1px solid ${T.bdr}` }}>
-                      <button onClick={()=>{ setSellStock(pos); setSellModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">Jual</button>
-                      <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(live)); setAddModal(true) }} style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Tambah</button>
+                      <button onClick={()=>{ setSellStock(pos); setSellPrice(String(rp(live))); setSellModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">Jual</button>
+                      <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Tambah</button>
                     </div>
                   </div>
                 )
@@ -1807,7 +1807,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               <div style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,padding:"14px 16px",borderRadius:14,marginBottom:20 }}>
                 <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6 }}>
                   <span style={{ fontSize:12,fontWeight:700,color:T.t3 }}>Total Biaya</span>
-                  <span style={{ fontSize:17,fontWeight:900,color:T.t1 }}>Rp {formatHarga(total_)}</span>
+                  <span style={{ fontSize:17,fontWeight:900,color:T.t1 }}>Rp {new Intl.NumberFormat("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}).format(total_)}</span>
                 </div>
                 <div style={{ display:"flex",justifyContent:"space-between" }}>
                   <span style={{ fontSize:11,color:T.t3 }}>{lot_} lot × 100 lembar × Rp {formatHarga(price_)}</span>
@@ -1820,20 +1820,37 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         </Modal>
 
         <Modal open={sellModal} onClose={()=>setSellModal(false)} title={`Jual ${sellStock?.stock_code}`} subtitle="Amankan Profit atau Cut Loss sesuai Trading Plan">
-          <div style={{ background:T.bg2,padding:16,borderRadius:16,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-            <span style={{ fontSize:13,fontWeight:700,color:T.t2 }}>Lot Dimiliki:</span>
-            <span style={{ fontSize:16,fontWeight:900,color:T.t1 }}>{sellStock?.lot} Lot <span style={{ fontSize:12,color:T.t3 }}>(Avg Rp {formatRupiah(sellStock?.avg_price)})</span></span>
+          <div style={{ background:T.bg2,padding:16,borderRadius:16,marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+            <div>
+              <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>LOT DIMILIKI</div>
+              <div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>{sellStock?.lot} Lot</div>
+              <div style={{ fontSize:11,color:T.t3 }}>Avg Rp {formatHarga(sellStock?.avg_price)}</div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>HARGA LIVE</div>
+              <div style={{ fontSize:15,fontWeight:800,color:T.em }}>Rp {formatHarga(parsePrice(sellPrice))}</div>
+            </div>
           </div>
-          <Input label="HARGA JUAL (Rp)" type="number" prefix="Rp" value={sellPrice} onChange={e=>setSellPrice(e.target.value)}/>
+          <Input label="HARGA JUAL (Rp)" type="number" prefix="Rp" value={sellPrice} onChange={e=>setSellPrice(e.target.value)} placeholder="Harga live sudah terisi otomatis"/>
           <Input label="LOT DIJUAL" type="number" hint={`Maks ${sellStock?.lot} Lot`} value={sellLot} onChange={e=>setSellLot(e.target.value)}/>
           {sellPrice&&sellLot&&(()=>{
-            const pnl=rp((parsePrice(sellPrice)-(sellStock?.avg_price||0))*(parseInt(sellLot)*100))
-            return (
-              <div style={{ background:pnl>=0?T.gBg:T.rBg,border:`1px solid ${pnl>=0?T.gBdr:T.rBdr}`,padding:16,borderRadius:16,marginBottom:20,textAlign:"center" }}>
-                <div style={{ fontSize:11,fontWeight:800,color:pnl>=0?T.green:T.red,marginBottom:4 }}>ESTIMASI REALIZED P&L</div>
-                <div style={{ fontSize:22,fontWeight:900,color:pnl>=0?T.green:T.red }}>{pnl>=0?"+":""}Rp {formatRupiah(pnl)}</div>
+            const sp_   = parsePrice(sellPrice)
+            const sl_   = parseInt(sellLot) || 0
+            const total_ = rp(sl_ * 100 * sp_)
+            const pnl   = rp((sp_ - (sellStock?.avg_price||0)) * sl_ * 100)
+            return (<>
+              <div style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,padding:"14px 16px",borderRadius:14,marginBottom:12 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6 }}>
+                  <span style={{ fontSize:12,fontWeight:700,color:T.t3 }}>Total Hasil Jual</span>
+                  <span style={{ fontSize:17,fontWeight:900,color:T.t1 }}>Rp {new Intl.NumberFormat("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}).format(total_)}</span>
+                </div>
+                <span style={{ fontSize:11,color:T.t3 }}>{sl_} lot × 100 lembar × Rp {formatHarga(sp_)}</span>
               </div>
-            )
+              <div style={{ background:pnl>=0?T.gBg:T.rBg,border:`1px solid ${pnl>=0?T.gBdr:T.rBdr}`,padding:"12px 16px",borderRadius:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                <span style={{ fontSize:11,fontWeight:800,color:pnl>=0?T.green:T.red }}>ESTIMASI P&L</span>
+                <span style={{ fontSize:18,fontWeight:900,color:pnl>=0?T.green:T.red }}>{pnl>=0?"+":""}Rp {new Intl.NumberFormat("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}).format(Math.abs(pnl))}</span>
+              </div>
+            </>)
           })()}
           <Btn variant="danger" full onClick={handleSell}>Konfirmasi Penjualan</Btn>
         </Modal>
