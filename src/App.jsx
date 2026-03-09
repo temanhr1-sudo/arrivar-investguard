@@ -56,6 +56,19 @@ function rp(val, decimals = 2) {
   return Math.round((val + Number.EPSILON) * factor) / factor
 }
 
+// ── Helper: format harga dengan desimal (untuk display harga saham) ──
+// Berbeda dari formatRupiah yang bulatkan ke integer
+function formatHarga(val) {
+  const n = Number(val) || 0
+  const rounded = rp(n, 2)
+  // Jika tidak ada desimal berarti (x.00), tampilkan tanpa desimal
+  if (rounded === Math.round(rounded)) {
+    return new Intl.NumberFormat('id-ID').format(rounded)
+  }
+  // Tampilkan dengan desimal, format ID (koma sebagai desimal)
+  return new Intl.NumberFormat('id-ID', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(rounded)
+}
+
 // ── Dividend Yield statis (sumber: laporan dividen FY2024-2025) ──
 const STATIC_DY = {
   BBRI:6.2, BMRI:5.4, BBNI:5.1, TLKM:7.2, PTBA:9.8, ITMG:11.6, ADRO:8.9,
@@ -969,7 +982,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 <div style={{ display:"flex",justifyContent:"space-between",marginBottom:10 }}>
                   <span style={{ fontSize:11,fontWeight:800,color:T.t2 }}>CASH RESERVE (DAYA BELI)</span>
                   <span style={{ fontSize:14,fontWeight:900,color:{red:T.red,amber:T.amber,green:T.green}[cashStatus] }}>
-                    {cashPct.toFixed(1)}% <span style={{ fontSize:11,fontWeight:600,color:T.t3 }}>| Rp {formatRupiahCompact(cash)}</span>
+                    {cashPct.toFixed(1)}% <span style={{ fontSize:11,fontWeight:600,color:T.t3 }}>| {formatRupiahCompact(cash)}</span>
                   </span>
                 </div>
                 <div style={{ height:6,background:T.bg0,borderRadius:99,overflow:"hidden" }}>
@@ -1779,17 +1792,30 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
         <Modal open={addModal} onClose={()=>setAddModal(false)} title={`Beli ${addStock?.c||addStock?.stock_code||""}`} subtitle="Buka posisi baru atau Average Down">
           <div style={{ background:T.bg2,padding:16,borderRadius:16,marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
-            <div><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>CASH TERSEDIA</div><div style={{ fontSize:15,fontWeight:800,color:T.em }}>Rp {formatRupiahCompact(cash)}</div></div>
-            <div style={{ textAlign:"right" }}><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>HARGA PASAR</div><div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>Rp {formatRupiah(buyPrice)}</div></div>
+            {/* CASH: formatRupiahCompact sudah ada prefix Rp sendiri */}
+            <div><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>CASH TERSEDIA</div><div style={{ fontSize:15,fontWeight:800,color:T.em }}>{formatRupiahCompact(cash)}</div></div>
+            {/* HARGA PASAR: pakai formatHarga agar desimal tampil, tanpa tambah Rp manual */}
+            <div style={{ textAlign:"right" }}><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>HARGA PASAR</div><div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>Rp {formatHarga(parsePrice(buyPrice))}</div></div>
           </div>
-          <Input label="HARGA BELI (Rp)" type="number" prefix="Rp" value={buyPrice} onChange={e=>setBuyPrice(e.target.value)}/>
+          <Input label="HARGA BELI (Rp)" type="number" prefix="Rp" value={buyPrice} onChange={e=>setBuyPrice(e.target.value)} placeholder="Contoh: 4387.68"/>
           <Input label="JUMLAH LOT" type="number" hint="1 Lot = 100 Lembar" value={buyLot} onChange={e=>setBuyLot(e.target.value)} placeholder="Contoh: 10"/>
-          {buyLot&&buyPrice && (
-            <div style={{ background:T.bg3,padding:16,borderRadius:16,marginBottom:20,display:"flex",justifyContent:"space-between" }}>
-              <span style={{ fontSize:13,fontWeight:700,color:T.t2 }}>Total Biaya:</span>
-              <span style={{ fontSize:16,fontWeight:900,color:T.t1 }}>Rp {formatRupiah(parseInt(buyLot)*100*parseFloat(buyPrice))}</span>
-            </div>
-          )}
+          {buyLot&&buyPrice && (()=>{
+            const lot_ = parseInt(buyLot) || 0
+            const price_ = parsePrice(buyPrice)
+            const total_ = rp(lot_ * 100 * price_)
+            return (
+              <div style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,padding:"14px 16px",borderRadius:14,marginBottom:20 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6 }}>
+                  <span style={{ fontSize:12,fontWeight:700,color:T.t3 }}>Total Biaya</span>
+                  <span style={{ fontSize:17,fontWeight:900,color:T.t1 }}>Rp {formatHarga(total_)}</span>
+                </div>
+                <div style={{ display:"flex",justifyContent:"space-between" }}>
+                  <span style={{ fontSize:11,color:T.t3 }}>{lot_} lot × 100 lembar × Rp {formatHarga(price_)}</span>
+                  <span style={{ fontSize:11,color:total_>cash?T.red:T.green,fontWeight:700 }}>{total_>cash?"⚠ Melebihi cash":"✓ Cukup"}</span>
+                </div>
+              </div>
+            )
+          })()}
           <Btn full onClick={handleBuy}>Eksekusi Pembelian</Btn>
         </Modal>
 
@@ -1801,7 +1827,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           <Input label="HARGA JUAL (Rp)" type="number" prefix="Rp" value={sellPrice} onChange={e=>setSellPrice(e.target.value)}/>
           <Input label="LOT DIJUAL" type="number" hint={`Maks ${sellStock?.lot} Lot`} value={sellLot} onChange={e=>setSellLot(e.target.value)}/>
           {sellPrice&&sellLot&&(()=>{
-            const pnl=(parseFloat(sellPrice)-(sellStock?.avg_price||0))*(parseInt(sellLot)*100)
+            const pnl=rp((parsePrice(sellPrice)-(sellStock?.avg_price||0))*(parseInt(sellLot)*100))
             return (
               <div style={{ background:pnl>=0?T.gBg:T.rBg,border:`1px solid ${pnl>=0?T.gBdr:T.rBdr}`,padding:16,borderRadius:16,marginBottom:20,textAlign:"center" }}>
                 <div style={{ fontSize:11,fontWeight:800,color:pnl>=0?T.green:T.red,marginBottom:4 }}>ESTIMASI REALIZED P&L</div>
