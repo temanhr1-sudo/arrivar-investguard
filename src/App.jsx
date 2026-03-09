@@ -12,6 +12,50 @@ import { fetchBatchLiveQuotes, fetchSingleStockSearch } from "./lib/yahooApi"
 import { calculateMoneyManagement, generateAdvisorySuggestions } from "./lib/moneyManagement"
 import { POPULAR_IDX_SYMBOLS, DARK, LIGHT, getGlobalStyles } from "./lib/constants"
 
+// ── Helper: parse harga dari input user (handle format ID & EN) ──
+// Contoh: "4.387,68" → 4387.68 | "4387,68" → 4387.68 | "4387.68" → 4387.68
+function parsePrice(raw) {
+  if (!raw && raw !== 0) return 0
+  const s = String(raw).trim()
+  // Deteksi format: jika ada koma DAN titik, tentukan mana desimal
+  // Format ID: 4.387,68  → titik=ribuan, koma=desimal
+  // Format EN: 4,387.68  → koma=ribuan, titik=desimal
+  // Hanya koma: 4387,68  → koma=desimal
+  // Hanya titik: 4387.68 → titik=desimal
+  let normalized
+  if (s.includes(',') && s.includes('.')) {
+    // Cek posisi: format mana yang lebih belakang
+    if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+      // ID format: 4.387,68
+      normalized = s.replace(/\./g, '').replace(',', '.')
+    } else {
+      // EN format: 4,387.68
+      normalized = s.replace(/,/g, '')
+    }
+  } else if (s.includes(',')) {
+    // Hanya koma — bisa ribuan (4,387) atau desimal (4387,68)
+    const parts = s.split(',')
+    if (parts[1]?.length === 3 && !parts[0].includes('.')) {
+      // Ribuan: 4,387
+      normalized = s.replace(',', '')
+    } else {
+      // Desimal: 4387,68
+      normalized = s.replace(',', '.')
+    }
+  } else {
+    // Hanya titik atau angka biasa
+    normalized = s.replace(/,/g, '')
+  }
+  const result = parseFloat(normalized)
+  return isNaN(result) ? 0 : Math.round(result * 100) / 100
+}
+
+// ── Helper: round ke N desimal tanpa floating point error ──
+function rp(val, decimals = 2) {
+  const factor = Math.pow(10, decimals)
+  return Math.round((val + Number.EPSILON) * factor) / factor
+}
+
 // ── Dividend Yield statis (sumber: laporan dividen FY2024-2025) ──
 const STATIC_DY = {
   BBRI:6.2, BMRI:5.4, BBNI:5.1, TLKM:7.2, PTBA:9.8, ITMG:11.6, ADRO:8.9,
@@ -635,23 +679,25 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   }
 
   const handleBuy = async () => {
-    const lot=parseInt(buyLot), price=parseFloat(buyPrice)
+    const lot=parseInt(buyLot), price=parsePrice(buyPrice)
     if (!lot||!price) { notify("Isi lot dan harga","amber"); return }
-    const shares=lot*100, cost=shares*price
-    const invested=portfolio.reduce((s,p)=>s+(p.shares*p.avg_price),0)
-    const cash=Math.max(0,(profile?.capital||0)-invested)
+    const shares  = lot * 100
+    const cost    = rp(shares * price)           // exact: 1800 * 4387.68 = 7,897,824.00
+    const invested= portfolio.reduce((s,p)=>s+rp(p.shares*p.avg_price),0)
+    const cash    = Math.max(0,(profile?.capital||0)-invested)
     if (cost>cash) { notify(`Cash tidak cukup! Tersedia: Rp ${formatRupiahCompact(cash)}`,"red"); return }
     const code=addStock?.c||addStock?.stock_code
     const exists=portfolio.find(p=>p.stock_code===code)
     try {
       if (exists) {
-        const ns=exists.shares+shares, na=(exists.shares*exists.avg_price+cost)/ns
+        const ns = exists.shares + shares
+        const na = rp((rp(exists.shares * exists.avg_price) + cost) / ns)  // avg baru exact
         await supabase.from("portfolio").update({ lot:exists.lot+lot,shares:ns,avg_price:na,close_price:price }).eq("id",exists.id)
       } else {
         await supabase.from("portfolio").insert([{ user_id:session.user.id,stock_code:code,sector:addStock?.s||"IDX",lot,shares,avg_price:price,close_price:price }])
       }
-      const jAlloc=capital>0?Math.round((shares*price/capital)*10000)/100:0
-      const { error: journalErr } = await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,pos_val:shares*price,cur_val:shares*price,pnl:0,pnl_pct:0,alloc_pct:jAlloc,suggestions:JSON.stringify([{t:"blue",msg:"BUY "+lot+"lot@"+price}]) }])
+      const jAlloc=capital>0?rp((cost/capital)*100):0
+      const { error: journalErr } = await supabase.from("journal").insert([{ user_id:session.user.id,stock_code:code,date:getTodayDateString(),lot,shares,avg_price:price,close_price:price,pos_val:cost,cur_val:cost,pnl:0,pnl_pct:0,alloc_pct:jAlloc,suggestions:JSON.stringify([{t:"blue",msg:"BUY "+lot+"lot@"+price}]) }])
       if (journalErr) { notify("Jurnal error: "+journalErr.message,"red"); console.error("Journal BUY error:",journalErr); return }
       await loadData(session.user.id); setAddModal(false); setBuyLot(""); setBuyPrice("")
       setTab("portfolio"); notify(`✅ Beli ${code} ${lot} lot sukses!`,"green")
@@ -659,7 +705,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   }
 
   const handleSell = async () => {
-    const lot=parseInt(sellLot), price=parseFloat(sellPrice)
+    const lot=parseInt(sellLot), price=parsePrice(sellPrice)
     if (!lot||!price) { notify("Isi lot dan harga","amber"); return }
     if (lot>sellStock.lot) { notify(`Maks ${sellStock.lot} lot`,"red"); return }
     const shares=lot*100
@@ -1097,7 +1143,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                               ))}
                             </div>
                           </div>
-                          <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(live)); setAddModal(true) }} style={{ width:"100%",background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.blue,cursor:"pointer" }} className="tap">Avg Down {canLot} lot @ Rp {formatRupiah(live)}</button>
+                          <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ width:"100%",background:T.lBg,border:`1px solid ${T.lBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.blue,cursor:"pointer" }} className="tap">Avg Down {canLot} lot @ Rp {formatRupiah(live)}</button>
                         </div>
                       ):isAD&&(canLot===0||over20)?(
                         <div style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:10,padding:"9px 12px",marginBottom:12 }}><div style={{ fontSize:10,fontWeight:700,color:T.amber }}>{over20?"Tidak bisa avg down — alokasi "+allocPct.toFixed(1)+"% sudah >20%":"Tidak bisa avg down — batas loss 11% hampir tercapai"}</div></div>
@@ -1109,7 +1155,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                               {[["Maks beli",canLot+" lot"],["Avg baru","Rp "+formatRupiah(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Biaya","Rp "+formatRupiahCompact(canRp)]].map(([l,v])=>(<div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.green }}>{v}</strong></div>))}
                             </div>
                           </div>
-                          <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(live)); setAddModal(true) }} style={{ width:"100%",background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Avg Up {canLot} lot @ Rp {formatRupiah(live)}</button>
+                          <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ width:"100%",background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Avg Up {canLot} lot @ Rp {formatRupiah(live)}</button>
                         </div>
                       ):(
                         <div style={{ background:T.bg2,borderRadius:9,padding:"8px 12px",marginBottom:12 }}><div style={{ fontSize:10,color:T.t2 }}>Hold — tunggu level TP atau Avg.</div></div>
@@ -1230,7 +1276,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                       Data fundamental tidak tersedia untuk saham ini
                     </div>
                   )}
-                  <Btn full onClick={()=>{ setAddStock(s); setBuyPrice(String(s.price||0)); setAddModal(true) }}>
+                  <Btn full onClick={()=>{ setAddStock(s); setBuyPrice(String(rp(s.price||0))); setAddModal(true) }}>
                     Tambah ke Portofolio
                   </Btn>
                 </div>
