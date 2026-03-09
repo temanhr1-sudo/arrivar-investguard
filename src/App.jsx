@@ -324,7 +324,7 @@ export default function App() {
           setLiveCache(p => ({ ...p, ...dict }))
           setLastSync(getCurrentTimeString())
           setScreenerLoaded(true)
-          notify(`✓ ${arr.length} saham IDX (data ${json.updated || ts})`, "green")
+          notify(`✓ ${arr.length} saham IDX dimuat · harga sync tiap 30 detik`, "green")
           setSyncing(false)
           return
         }
@@ -350,44 +350,53 @@ export default function App() {
 
   // corp-action auto-load added below after loadCorpActions defined
 
+  // Shared merge helper — preserve fundamentals, update price only
+  const mergeLive = useCallback((prev, fresh) => {
+    const existing = prev || {}
+    return {
+      ...existing,
+      ...fresh,
+      pe:   (fresh.pe   > 0 ? fresh.pe   : existing.pe)   || 0,
+      pbv:  (fresh.pbv  > 0 ? fresh.pbv  : existing.pbv)  || 0,
+      roe:  (fresh.roe  > 0 ? fresh.roe  : existing.roe)  || 0,
+      dy:   (fresh.dy   > 0 ? fresh.dy   : existing.dy)   || 0,
+      der:  (fresh.der  > 0 ? fresh.der  : existing.der)  || 0,
+      npm:  (fresh.npm  > 0 ? fresh.npm  : existing.npm)  || 0,
+      wk52: existing.wk52 || fresh.wk52 || 0,
+      wk13: existing.wk13 || fresh.wk13 || 0,
+      wk4:  existing.wk4  || fresh.wk4  || 0,
+    }
+  }, [])
+
   const syncPrices = useCallback(async () => {
-    if (!portfolio.length) return
     setSyncing(true)
-    const codes = portfolio.map(p=>p.stock_code)
-    const upd = await fetchBatchLiveQuotes(codes)
+    // Kumpulkan semua kode: portfolio + screener yang sedang tampil (max 30)
+    const portfolioCodes = portfolio.map(p => p.stock_code)
+    const screenerRef    = window.__screenerVisibleCodes__ || []
+    const allCodes       = [...new Set([...portfolioCodes, ...screenerRef])].filter(Boolean)
+    if (!allCodes.length) { setSyncing(false); return }
+
+    const upd = await fetchBatchLiveQuotes(allCodes)
     if (Object.keys(upd).length > 0) {
       setLiveCache(prev => {
         const next = { ...prev }
         for (const [code, fresh] of Object.entries(upd)) {
-          // Merge: keep existing wk52/wk13/wk4/fundamentals, only update price fields
-          const existing = prev[code] || {}
-          next[code] = {
-            ...existing,           // preserve wk52, wk13, wk4, pe, pbv, roe, dy dll
-            ...fresh,              // Yahoo live: price, chgPct, volume, high, low
-            // Re-apply fundamentals from existing JSON if Yahoo returned 0
-            pe:  (fresh.pe  > 0 ? fresh.pe  : existing.pe)  || 0,
-            pbv: (fresh.pbv > 0 ? fresh.pbv : existing.pbv) || 0,
-            roe: (fresh.roe > 0 ? fresh.roe : existing.roe) || 0,
-            dy:  (fresh.dy  > 0 ? fresh.dy  : existing.dy)  || 0,
-            der: (fresh.der > 0 ? fresh.der : existing.der) || 0,
-            npm: (fresh.npm > 0 ? fresh.npm : existing.npm) || 0,
-            wk52: existing.wk52 || fresh.wk52 || 0,
-            wk13: existing.wk13 || fresh.wk13 || 0,
-            wk4:  existing.wk4  || fresh.wk4  || 0,
-          }
+          next[code] = mergeLive(prev[code], fresh)
         }
         return next
       })
       setLastSync(getCurrentTimeString())
     }
     setSyncing(false)
-  }, [portfolio])
+  }, [portfolio, mergeLive])
 
   useEffect(() => {
-    if (portfolio.length > 0 && screenerLoaded) {
-      const id = setInterval(syncPrices, 30000); return ()=>clearInterval(id)
+    if (screenerLoaded) {
+      syncPrices() // immediate first sync
+      const id = setInterval(syncPrices, 30000)
+      return () => clearInterval(id)
     }
-  }, [portfolio.length, screenerLoaded, syncPrices])
+  }, [screenerLoaded]) // eslint-disable-line
 
   // ── Push: reset notifLog on user switch ──────────────────
   useEffect(() => {
@@ -702,10 +711,22 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
   // Screener filter
   const screenerList = (() => {
-    let list=[...screenerData]
+    // Merge screenerData dengan liveCache untuk harga terkini
+    let list = screenerData.map(s => {
+      const live = liveCache[s.c]
+      if (!live) return s
+      return {
+        ...s,
+        price:  live.price  || s.price,
+        chgPct: live.chgPct ?? live.chgpct ?? s.chgPct ?? s.chgpct ?? 0,
+        chg:    live.chg    || s.chg || 0,
+        vol:    live.volume || live.vol || s.vol || 0,
+      }
+    })
+
     if (screenerQ.trim()) {
-      const q=screenerQ.toUpperCase()
-      list=list.filter(s=>s.c.includes(q)||(s.n||"").toUpperCase().includes(q))
+      const q = screenerQ.toUpperCase()
+      list = list.filter(s => s.c.includes(q) || (s.n || "").toUpperCase().includes(q))
     }
     const f = screenerFilter
     if      (f==="LQ45")      list=list.filter(s=>s.idx_member||s.idx_list?.includes("LQ45")).sort((a,b)=>b.vol-a.vol)
@@ -715,8 +736,11 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
     else if (f==="ROE")       list=list.filter(s=>Number(s.roe)>15).sort((a,b)=>Number(b.roe)-Number(a.roe))
     else if (f==="GrowthMom") list=list.filter(s=>Number(s.wk4)>0&&Number(s.wk13)>0).sort((a,b)=>Number(b.wk4)-Number(a.wk4))
     else if (f==="ValuePick") list=list.filter(s=>Number(s.pe)>0&&Number(s.pe)<12&&Number(s.pbv)>0&&Number(s.pbv)<1.5&&Number(s.roe)>10).sort((a,b)=>Number(b.roe)-Number(a.roe))
-    else list=list.filter(s=>s.price>0).sort((a,b)=>b.vol-a.vol)  // Semua: sort by volume
-    return list.slice(0,80)
+    else list=list.filter(s=>s.price>0).sort((a,b)=>b.vol-a.vol)
+    const sliced = list.slice(0, 80)
+    // Expose visible codes so syncPrices can fetch them
+    window.__screenerVisibleCodes__ = sliced.map(s => s.c)
+    return sliced
   })()
 
   // Forecast
