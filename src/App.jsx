@@ -69,7 +69,6 @@ import {
   ShieldCheck, Shield, Info, Filter, Sun, Moon, CheckCircle,
   DollarSign, Activity, TrendingDown, BarChart, Percent,
   RefreshCw, Bell, BellOff, Calendar as CalendarIcon, Crown, Lock, Zap, ChevronLeft, ChevronRight,
-  Eye, Flame, Users, Globe, TrendingUp as TrendUp,
 } from "lucide-react"
 import { supabase }          from "./lib/supabase"
 import { fetchBatchLiveQuotes, fetchSingleStockSearch } from "./lib/yahooApi"
@@ -264,7 +263,6 @@ const BottomNav = ({ tab, setTab }) => {
     { id:"monitor",   label:"Monitor",   Icon:BarChart2 },
     { id:"forecast",  label:"Forecast",  Icon:TrendingUp },
     { id:"calendar",  label:"Kalender",  Icon:CalendarIcon },
-    { id:"bandar",    label:"Bandar",    Icon:Eye },
     { id:"strategi",  label:"Strategi",  Icon:Lightbulb },
   ]
   return (
@@ -353,16 +351,13 @@ export default function App() {
   const [sellLot,   setSellLot]   = useState("")
   const [sellPrice, setSellPrice] = useState("")
   const [sellNote,  setSellNote]  = useState("")
-  const [editModal, setEditModal] = useState(false)
-  const [editPos,   setEditPos]   = useState(null)
-  const [editAvg,   setEditAvg]   = useState("")
-  const [editLot,   setEditLot]   = useState("")
-  // ── Bandar Tab state ──────────────────────────────────
-  const [bandarNetForeign, setBandarNetForeign] = useState(null)
-  const [bandarLoading,    setBandarLoading]    = useState(false)
-  const [bandarLastFetch,  setBandarLastFetch]  = useState(null)
-  const [brokerSummary,    setBrokerSummary]    = useState([])
-  const [brokerLoading,    setBrokerLoading]    = useState(false)
+  const [editModal,   setEditModal]   = useState(false)
+  const [editPos,     setEditPos]     = useState(null)
+  const [editAvg,     setEditAvg]     = useState("")
+  const [editLot,     setEditLot]     = useState("")
+  const [editNominal, setEditNominal] = useState("")   // total modal yg diinvestasikan
+  const [editMode,    setEditMode]    = useState("avg") // "avg" | "nominal"
+
   const [topupModal,setTopupModal]= useState(false)
   const [topupVal,  setTopupVal]  = useState("")
   const [email,     setEmail]     = useState("")
@@ -535,147 +530,6 @@ export default function App() {
   }, [screenerLoaded]) // eslint-disable-line
 
 
-  // ══════════════════════════════════════════════════════════════
-  // TAB BANDAR — Fetch & Logic
-  // ══════════════════════════════════════════════════════════════
-
-  // ── Hitung Unusual Volume Score dari liveCache ──────────────
-  const getVolumeSpikeList = useCallback(() => {
-    const result = []
-    for (const [code, data] of Object.entries(liveCache)) {
-      const volToday = data.volume || data.vol || 0
-      const volAvg   = data.averageVolume || data.avg_vol || 0
-      if (volToday > 0 && volAvg > 0) {
-        const ratio = volToday / volAvg
-        if (ratio >= 2) {
-          result.push({
-            code,
-            price:    data.price || 0,
-            chgPct:   data.chgPct || data.changePercent || 0,
-            volToday,
-            volAvg,
-            ratio:    Math.round(ratio * 10) / 10,
-            inPorto:  portfolio.some(p => p.stock_code === code),
-          })
-        }
-      }
-    }
-    return result.sort((a, b) => b.ratio - a.ratio).slice(0, 20)
-  }, [liveCache, portfolio])
-
-  // ── Fetch Net Foreign dari IDX via allorigins ───────────────
-  const fetchNetForeign = useCallback(async () => {
-    setBandarLoading(true)
-    try {
-      const IDX_URL = "https://idx.co.id/id/data-pasar/ringkasan-perdagangan/ringkasan-saham/"
-      const proxy   = `https://api.allorigins.win/get?url=${encodeURIComponent(IDX_URL)}`
-      const r       = await fetch(proxy, { signal: AbortSignal.timeout(10000) })
-      const wrapper = await r.json()
-      // IDX returns HTML page — extract net foreign from embedded JSON
-      const html    = wrapper.contents || ""
-      // Try to parse structured market summary
-      const IDX_API = "https://idx.co.id/primary/StockData/GetIndexSummary"
-      const proxy2  = `https://api.allorigins.win/get?url=${encodeURIComponent(IDX_API)}`
-      const r2      = await fetch(proxy2, { signal: AbortSignal.timeout(10000) })
-      const w2      = await r2.json()
-      const d       = JSON.parse(w2.contents || "{}")
-      // Try different possible field structures
-      const foreignNetBuy  = d?.ForeignNetBuy  || d?.foreignNetBuy  || d?.NetForeignBuy  || null
-      const foreignNetSell = d?.ForeignNetSell || d?.foreignNetSell || d?.NetForeignSell || null
-      const netVal         = d?.ForeignNet     || d?.foreignNet     || null
-      if (foreignNetBuy !== null || netVal !== null) {
-        setBandarNetForeign({ netBuy: foreignNetBuy, netSell: foreignNetSell, netVal, date: new Date().toLocaleDateString("id-ID") })
-        setBandarLastFetch(new Date().toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit" }))
-        setBandarLoading(false)
-        return
-      }
-    } catch(e) { console.warn("Net foreign fetch:", e.message) }
-
-    // Fallback: estimate from liveCache foreign data if available
-    // Just show "tidak tersedia" gracefully
-    setBandarNetForeign({ netBuy: null, netSell: null, netVal: null, date: new Date().toLocaleDateString("id-ID"), fallback: true })
-    setBandarLastFetch(new Date().toLocaleTimeString("id-ID", { hour:"2-digit", minute:"2-digit" }))
-    setBandarLoading(false)
-  }, [])
-
-  // ── Fetch Broker Summary per-saham dari IDX ─────────────────
-  const fetchBrokerSummary = useCallback(async (stockCode) => {
-    if (!stockCode) return
-    setBrokerLoading(true)
-    try {
-      const url    = `https://idx.co.id/primary/TradingSummary/GetBrokerSummary?code=${stockCode}&period=Daily`
-      const proxy  = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`
-      const r      = await fetch(proxy, { signal: AbortSignal.timeout(10000) })
-      const w      = await r.json()
-      const d      = JSON.parse(w.contents || "{}")
-      const rows   = d?.data || d?.Data || d?.result || []
-
-      // Key brokers to highlight
-      const KEY_BROKERS = {
-        AK: { name:"UBS Sekuritas",    tier:1, bull:true  },
-        ZP: { name:"Maybank Sekuritas", tier:1, bull:true  },
-        BK: { name:"J.P. Morgan",       tier:1, bull:true  },
-        YP: { name:"Mirae Asset",       tier:2, bull:false },
-        YU: { name:"CGS International", tier:2, bull:false },
-        DP: { name:"DBS Vickers",       tier:2, bull:true  },
-        GW: { name:"HSBC Sekuritas",    tier:2, bull:false },
-        CP: { name:"KB Valbury",        tier:2, bull:false },
-        CC: { name:"Mandiri Sekuritas", tier:2, bull:true  },
-        NI: { name:"BNI Sekuritas",     tier:2, bull:true  },
-        PD: { name:"Indo Premier",      tier:3, bull:false },
-        XL: { name:"Stockbit",          tier:3, bull:false },
-      }
-
-      if (rows.length > 0) {
-        const mapped = rows
-          .filter(r => KEY_BROKERS[r.broker_code || r.BrokerCode])
-          .map(r => {
-            const code = r.broker_code || r.BrokerCode
-            const nb   = Number(r.net_buy || r.NetBuy || 0)
-            const ns   = Number(r.net_sell || r.NetSell || 0)
-            const net  = nb - ns
-            return { code, ...KEY_BROKERS[code], netBuy: nb, netSell: ns, net }
-          })
-          .sort((a, b) => Math.abs(b.net) - Math.abs(a.net))
-        setBrokerSummary(mapped)
-      } else {
-        // IDX blocked or no data — return empty with note
-        setBrokerSummary([{ code:"—", name:"Data tidak tersedia (IDX blokir akses langsung dari browser)", tier:0, net:0 }])
-      }
-    } catch(e) {
-      console.warn("Broker summary:", e.message)
-      setBrokerSummary([{ code:"—", name:"Gagal memuat. Cek RTI Business atau Stockbit Pro untuk broker summary.", tier:0, net:0 }])
-    }
-    setBrokerLoading(false)
-  }, [])
-
-  // ── Auto fetch net foreign saat tab bandar dibuka ───────────
-  useEffect(() => {
-    if (tab === "bandar" && !bandarNetForeign && !bandarLoading) {
-      fetchNetForeign()
-    }
-  }, [tab]) // eslint-disable-line
-
-  // ── Catalyst Alert: porto × calendar events ─────────────────
-  const getCatalystAlerts = useCallback(() => {
-    if (!portfolio.length) return []
-    const today = new Date()
-    const portoCodes = portfolio.map(p => p.stock_code)
-    // corpActions from calendar tab (already loaded)
-    return (window.__corpActions__ || [])
-      .filter(ev => {
-        if (!portoCodes.includes(ev.code)) return false
-        const evDate = new Date(ev.date)
-        const diffDays = Math.ceil((evDate - today) / (1000 * 60 * 60 * 24))
-        return diffDays >= 0 && diffDays <= 21
-      })
-      .map(ev => {
-        const evDate = new Date(ev.date)
-        const daysLeft = Math.ceil((evDate - today) / (1000 * 60 * 60 * 24))
-        return { ...ev, daysLeft }
-      })
-      .sort((a, b) => a.daysLeft - b.daysLeft)
-  }, [portfolio])
 
   // ── Push: reset notifLog on user switch ──────────────────
   useEffect(() => {
@@ -982,18 +836,29 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   const cashPct    = capital>0 ? (cash/capital)*100 : 100
   const totalEquity= capital + unrealPnL
   const handleEdit = async () => {
-    const newAvgP = parsePrice(editAvg)
-    const newLot  = parseInt(editLot)
-    if (!newAvgP || !newLot) { notify("Isi avg price dan lot","amber"); return }
+    const newLot = parseInt(editLot)
+    if (!newLot || newLot < 1) { notify("Isi jumlah lot","amber"); return }
+
+    let finalAvg
+    if (editMode === "nominal") {
+      // User input nominal total → hitung avg otomatis
+      const nominal = parsePrice(editNominal)
+      if (!nominal || nominal <= 0) { notify("Isi nominal investasi","amber"); return }
+      finalAvg = rp(nominal / (newLot * 100))  // avg per lembar
+    } else {
+      finalAvg = parsePrice(editAvg)
+      if (!finalAvg || finalAvg <= 0) { notify("Isi avg price","amber"); return }
+    }
+
     try {
       await supabase.from("portfolio").update({
-        avg_price: newAvgP,
+        avg_price: finalAvg,
         lot:       newLot,
         shares:    newLot * 100,
       }).eq("id", editPos.id)
       await loadData(session.user.id)
-      setEditModal(false); setEditPos(null)
-      notify(`✅ Posisi ${editPos.stock_code} diperbarui`, "green")
+      setEditModal(false); setEditPos(null); setEditNominal("")
+      notify(`✅ ${editPos.stock_code} — avg Rp ${formatHarga(finalAvg)} · ${newLot} lot`, "green")
     } catch(e) { notify("Gagal: "+e.message, "red") }
   }
 
@@ -1415,7 +1280,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     </div>
                     <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",borderTop:`1px solid ${T.bdr}` }}>
                       <button onClick={()=>{ setSellStock(pos); setSellPrice(String(rp(live))); setSellModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.red,cursor:"pointer" }} className="tap">Jual</button>
-                      <button onClick={()=>{ setEditPos(pos); setEditAvg(String(pos.avg_price)); setEditLot(String(pos.lot)); setEditModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.t2,cursor:"pointer" }} className="tap">Edit</button>
+                      <button onClick={()=>{ setEditPos(pos); setEditAvg(String(pos.avg_price)); setEditLot(String(pos.lot)); setEditNominal(""); setEditMode("avg"); setEditModal(true) }} style={{ background:"transparent",border:"none",borderRight:`1px solid ${T.bdr}`,padding:"11px",fontSize:12,fontWeight:800,color:T.t2,cursor:"pointer" }} className="tap">Edit</button>
                       <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ background:"transparent",border:"none",padding:"11px",fontSize:12,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Tambah</button>
                     </div>
                   </div>
@@ -2034,310 +1899,6 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
         <BottomNav tab={tab} setTab={setTab}/>
 
-        {/* ══ TAB BANDAR ══ */}
-        {tab==="bandar" && (() => {
-          const volSpikes    = getVolumeSpikeList()
-          const catalysts    = getCatalystAlerts()
-          const T2           = T  // alias
-
-          // ── Scoring helper ──────────────────────────────────
-          const getBandarScore = (item) => {
-            let score = 0
-            if (item.ratio >= 5)  score += 40
-            else if (item.ratio >= 3) score += 25
-            else if (item.ratio >= 2) score += 15
-            const chg = item.chgPct || 0
-            if (chg > 0 && chg < 3) score += 20  // naik tapi belum terlalu spike (akumulasi)
-            if (item.inPorto) score += 10
-            if (catalysts.some(c => c.code === item.code)) score += 30
-            return Math.min(score, 100)
-          }
-
-          const Card = ({ children, style={} }) => (
-            <div style={{ background:T.bg1, border:`1px solid ${T.bdr2}`, borderRadius:18, padding:18, marginBottom:14, ...style }}>
-              {children}
-            </div>
-          )
-          const SectionLabel = ({ children, color=T.em }) => (
-            <div style={{ fontSize:10, fontWeight:800, color, letterSpacing:"1.5px", marginBottom:10, fontFamily:"monospace" }}>
-              {children}
-            </div>
-          )
-          const Badge = ({ children, color, bg }) => (
-            <span style={{ fontSize:9, fontWeight:800, padding:"3px 8px", borderRadius:999, background:bg, color, letterSpacing:"0.5px", fontFamily:"monospace" }}>
-              {children}
-            </span>
-          )
-
-          return (
-            <div style={{ maxWidth:480, margin:"0 auto", padding:"16px 16px 120px" }}>
-
-              {/* ── Header ── */}
-              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
-                <div style={{ width:44, height:44, borderRadius:14, background:T.emBg, display:"flex", alignItems:"center", justifyContent:"center" }}>
-                  <Eye size={22} color={T.em}/>
-                </div>
-                <div>
-                  <div style={{ fontSize:22, fontWeight:900, color:T.t1 }}>Radar Bandar</div>
-                  <div style={{ fontSize:12, color:T.t3 }}>Volume Spike · Net Foreign · Catalyst Alert</div>
-                </div>
-                <button onClick={fetchNetForeign} disabled={bandarLoading}
-                  style={{ marginLeft:"auto", background:T.bg2, border:`1px solid ${T.bdr2}`, borderRadius:10, padding:"8px 12px", cursor:"pointer", color:T.t2, fontSize:12, display:"flex", alignItems:"center", gap:6 }}>
-                  <RefreshCw size={13} color={T.t2} style={{ animation: bandarLoading ? "spin 1s linear infinite" : "none" }}/>
-                  {bandarLastFetch ? bandarLastFetch : "Sync"}
-                </button>
-              </div>
-
-              {/* ── Net Foreign Meter ── */}
-              <Card>
-                <SectionLabel>🌍 NET FOREIGN HARI INI</SectionLabel>
-                {bandarLoading ? (
-                  <div style={{ textAlign:"center", padding:"20px 0", color:T.t3, fontSize:13 }}>Memuat data IDX...</div>
-                ) : bandarNetForeign?.fallback || bandarNetForeign?.netVal === null ? (
-                  <div>
-                    <div style={{ fontSize:13, color:T.amber, marginBottom:8 }}>⚠ Data IDX tidak bisa diakses langsung dari browser</div>
-                    <div style={{ fontSize:12, color:T.t3, lineHeight:1.6 }}>
-                      Cek net foreign di: <strong style={{ color:T.em }}>RTI Business</strong> → Market Data → Foreign Flow<br/>
-                      atau <strong style={{ color:T.em }}>Stockbit</strong> → Market → Asing Beli/Jual
-                    </div>
-                    {/* Estimate from liveCache */}
-                    {(() => {
-                      const total = Object.values(liveCache).length
-                      const down  = Object.values(liveCache).filter(s => (s.chgPct || 0) < -1).length
-                      const pctDown = total > 0 ? Math.round((down/total)*100) : 0
-                      const sentiment = pctDown > 60 ? "JUAL ASING" : pctDown < 30 ? "BELI ASING" : "NETRAL"
-                      const sentColor = pctDown > 60 ? T.red : pctDown < 30 ? T.green : T.amber
-                      return (
-                        <div style={{ background:T.bg2, borderRadius:12, padding:12, marginTop:12 }}>
-                          <div style={{ fontSize:10, fontWeight:800, color:T.t3, marginBottom:6, fontFamily:"monospace" }}>ESTIMASI DARI {total} SAHAM LIVE</div>
-                          <div style={{ fontSize:22, fontWeight:900, color:sentColor }}>{sentiment}</div>
-                          <div style={{ fontSize:12, color:T.t3 }}>{pctDown}% saham turun &gt;1% hari ini</div>
-                        </div>
-                      )
-                    })()}
-                  </div>
-                ) : bandarNetForeign ? (
-                  <div>
-                    <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10 }}>
-                      {[
-                        { label:"NET BELI ASING", val:bandarNetForeign.netBuy, color:T.green },
-                        { label:"NET JUAL ASING", val:bandarNetForeign.netSell, color:T.red },
-                        { label:"NET TOTAL",       val:bandarNetForeign.netVal, color: (bandarNetForeign.netVal||0)>=0?T.green:T.red },
-                      ].map(({ label, val, color }) => (
-                        <div key={label} style={{ background:T.bg2, borderRadius:12, padding:"10px 12px" }}>
-                          <div style={{ fontSize:9, fontWeight:800, color:T.t3, marginBottom:4, fontFamily:"monospace" }}>{label}</div>
-                          <div style={{ fontSize:13, fontWeight:800, color }}>
-                            {val != null ? (val >= 0 ? "+" : "") + (val/1e9).toFixed(1) + "T" : "—"}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{ fontSize:10, color:T.t3, marginTop:8 }}>Data: {bandarNetForeign.date} · Sumber IDX</div>
-                  </div>
-                ) : (
-                  <div style={{ textAlign:"center", padding:"16px 0", color:T.t3, fontSize:13 }}>
-                    Tap Sync untuk memuat data net foreign IDX
-                  </div>
-                )}
-              </Card>
-
-              {/* ── Catalyst Alert (Porto × Event) ── */}
-              {catalysts.length > 0 && (
-                <Card style={{ borderLeft:`3px solid ${T.amber}` }}>
-                  <SectionLabel color={T.amber}>⚡ CATALYST ALERT — PORTO KAMU</SectionLabel>
-                  {catalysts.map((ev, i) => (
-                    <div key={i} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom: i < catalysts.length-1 ? `1px solid ${T.bdr}` : "none" }}>
-                      <div>
-                        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:3 }}>
-                          <span style={{ fontSize:15, fontWeight:800, color:T.em, fontFamily:"monospace" }}>{ev.code}</span>
-                          <Badge color={T.amber} bg={T.aBg}>{ev.event || ev.type || "EVENT"}</Badge>
-                        </div>
-                        <div style={{ fontSize:12, color:T.t3 }}>{ev.date}</div>
-                      </div>
-                      <div style={{ textAlign:"right" }}>
-                        <div style={{ fontSize:16, fontWeight:900, color: ev.daysLeft <= 7 ? T.red : T.amber }}>H-{ev.daysLeft}</div>
-                        <div style={{ fontSize:10, color:T.t3 }}>hari lagi</div>
-                      </div>
-                    </div>
-                  ))}
-                </Card>
-              )}
-
-              {/* ── Unusual Volume Scanner ── */}
-              <Card>
-                <SectionLabel>🔥 UNUSUAL VOLUME SCANNER (≥2× rata-rata)</SectionLabel>
-                {volSpikes.length === 0 ? (
-                  <div style={{ textAlign:"center", padding:"20px 0", color:T.t3, fontSize:13 }}>
-                    Belum ada saham dengan volume spike terdeteksi.<br/>
-                    <span style={{ fontSize:12 }}>Data diambil dari {Object.keys(liveCache).length} saham live.</span>
-                  </div>
-                ) : volSpikes.map((item, i) => {
-                  const score    = getBandarScore(item)
-                  const chgColor = item.chgPct >= 0 ? T.green : T.red
-                  const isHot    = item.ratio >= 5
-                  const isMed    = item.ratio >= 3
-                  return (
-                    <div key={item.code} style={{
-                      background: isHot ? T.rBg : isMed ? T.aBg : T.bg2,
-                      border:`1px solid ${isHot ? T.rBdr : isMed ? T.aBdr : T.bdr2}`,
-                      borderLeft:`3px solid ${isHot ? T.red : isMed ? T.amber : T.green}`,
-                      borderRadius:14, padding:"12px 14px", marginBottom:10,
-                    }}>
-                      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
-                        <div>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
-                            <span style={{ fontSize:16, fontWeight:900, color:T.t1, fontFamily:"monospace" }}>{item.code}</span>
-                            {item.inPorto && <Badge color={T.em} bg={T.emBg}>PORTO</Badge>}
-                            {catalysts.some(c => c.code === item.code) && <Badge color={T.amber} bg={T.aBg}>CATALYST</Badge>}
-                            {isHot && <Badge color={T.red} bg={T.rBg}>🔥 HOT</Badge>}
-                          </div>
-                          <div style={{ display:"flex", gap:16, fontSize:12, color:T.t3 }}>
-                            <span>Rp {item.price?.toLocaleString("id-ID")}</span>
-                            <span style={{ color:chgColor, fontWeight:700 }}>{item.chgPct >= 0 ? "+" : ""}{item.chgPct?.toFixed(2)}%</span>
-                          </div>
-                        </div>
-                        <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:20, fontWeight:900, color:isHot?T.red:isMed?T.amber:T.green }}>{item.ratio}×</div>
-                          <div style={{ fontSize:10, color:T.t3 }}>volume rata-rata</div>
-                        </div>
-                      </div>
-                      {/* Volume bar */}
-                      <div style={{ marginTop:10 }}>
-                        <div style={{ display:"flex", justifyContent:"space-between", fontSize:10, color:T.t3, marginBottom:4 }}>
-                          <span>Vol hari ini: {(item.volToday/1000).toFixed(0)}K</span>
-                          <span>Avg 10 hari: {(item.volAvg/1000).toFixed(0)}K</span>
-                        </div>
-                        <div style={{ background:T.bg3, borderRadius:99, height:5, overflow:"hidden" }}>
-                          <div style={{ width:`${Math.min((item.ratio/10)*100, 100)}%`, height:"100%", borderRadius:99, background: isHot?T.red:isMed?T.amber:T.green, transition:"width .6s" }}/>
-                        </div>
-                      </div>
-                      {/* Skor Bandar */}
-                      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginTop:10 }}>
-                        <div style={{ fontSize:11, color:T.t3 }}>Skor Bandar</div>
-                        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-                          <div style={{ background:T.bg3, borderRadius:99, height:4, width:80, overflow:"hidden" }}>
-                            <div style={{ width:`${score}%`, height:"100%", background: score>=70?T.red:score>=40?T.amber:T.green, borderRadius:99 }}/>
-                          </div>
-                          <span style={{ fontSize:12, fontWeight:800, color: score>=70?T.red:score>=40?T.amber:T.green }}>{score}</span>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </Card>
-
-              {/* ── Broker Summary per Saham ── */}
-              <Card>
-                <SectionLabel>🏦 BROKER SUMMARY PER SAHAM</SectionLabel>
-                <div style={{ fontSize:12, color:T.t3, marginBottom:12, lineHeight:1.6 }}>
-                  Lihat siapa yang beli/jual suatu saham hari ini. Pilih saham dari porto atau ketik kode:
-                </div>
-                <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
-                  {portfolio.slice(0,5).map(p => (
-                    <button key={p.stock_code} onClick={() => fetchBrokerSummary(p.stock_code)}
-                      style={{ padding:"6px 12px", borderRadius:10, border:`1px solid ${T.bdr2}`, background:T.bg2, color:T.em, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"monospace" }}>
-                      {p.stock_code}
-                    </button>
-                  ))}
-                  {['BBRI','BBCA','TLKM','ANTM','GOTO'].filter(c => !portfolio.map(p=>p.stock_code).includes(c)).slice(0,3).map(c => (
-                    <button key={c} onClick={() => fetchBrokerSummary(c)}
-                      style={{ padding:"6px 12px", borderRadius:10, border:`1px solid ${T.bdr2}`, background:T.bg2, color:T.t2, fontSize:12, fontWeight:700, cursor:"pointer", fontFamily:"monospace" }}>
-                      {c}
-                    </button>
-                  ))}
-                </div>
-                {brokerLoading ? (
-                  <div style={{ textAlign:"center", padding:16, color:T.t3, fontSize:13 }}>Memuat broker summary...</div>
-                ) : brokerSummary.length > 0 ? (
-                  <div>
-                    {/* Key brokers: tier 1 asing */}
-                    <div style={{ fontSize:10, fontWeight:800, color:T.green, marginBottom:8, fontFamily:"monospace" }}>BROKER ASING INSTITUSI</div>
-                    {brokerSummary.filter(b => b.tier === 1).map(b => (
-                      <div key={b.code} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 12px", background:T.bg2, borderRadius:12, marginBottom:6, borderLeft:`3px solid ${b.net >= 0 ? T.green : T.red}` }}>
-                        <div>
-                          <span style={{ fontFamily:"monospace", fontWeight:800, fontSize:14, color:T.t1 }}>{b.code}</span>
-                          <span style={{ fontSize:11, color:T.t3, marginLeft:8 }}>{b.name}</span>
-                        </div>
-                        <div style={{ textAlign:"right" }}>
-                          <div style={{ fontSize:14, fontWeight:900, color:b.net >= 0 ? T.green : T.red }}>
-                            {b.net >= 0 ? "+" : ""}{(b.net/1e9).toFixed(2)}T
-                          </div>
-                          <div style={{ fontSize:10, color:T.t3 }}>{b.net >= 0 ? "NET BUY" : "NET SELL"}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {brokerSummary.filter(b => b.tier === 2).length > 0 && <>
-                      <div style={{ fontSize:10, fontWeight:800, color:T.amber, margin:"10px 0 8px", fontFamily:"monospace" }}>BROKER LAIN</div>
-                      {brokerSummary.filter(b => b.tier === 2 || b.tier === 3).map(b => (
-                        <div key={b.code} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"8px 12px", background:T.bg2, borderRadius:10, marginBottom:5, borderLeft:`3px solid ${b.net >= 0 ? T.green : T.red}`, opacity: b.tier===3 ? 0.7 : 1 }}>
-                          <div>
-                            <span style={{ fontFamily:"monospace", fontWeight:700, fontSize:13, color:T.t1 }}>{b.code}</span>
-                            <span style={{ fontSize:11, color:T.t3, marginLeft:8 }}>{b.name}</span>
-                            {b.tier === 3 && <span style={{ fontSize:9, color:T.red, marginLeft:6, fontFamily:"monospace" }}>RETAIL</span>}
-                          </div>
-                          <div style={{ fontSize:13, fontWeight:800, color:b.net >= 0 ? T.green : T.red }}>
-                            {b.net >= 0 ? "+" : ""}{(b.net/1e9).toFixed(2)}T
-                          </div>
-                        </div>
-                      ))}
-                    </>}
-                    {/* If only fallback/error message */}
-                    {brokerSummary.length === 1 && brokerSummary[0].tier === 0 && (
-                      <div style={{ background:T.aBg, border:`1px solid ${T.aBdr}`, borderRadius:12, padding:12 }}>
-                        <div style={{ fontSize:12, color:T.amber, lineHeight:1.6 }}>⚠ {brokerSummary[0].name}</div>
-                        <div style={{ fontSize:11, color:T.t3, marginTop:8 }}>
-                          Alternatif: Buka <strong style={{ color:T.em }}>RTI Business</strong> → Broker Summary → Ketik kode saham
-                        </div>
-                      </div>
-                    )}
-                    {/* Interpretasi sinyal */}
-                    {brokerSummary.filter(b => b.tier === 1 && b.net > 0).length >= 2 && (
-                      <div style={{ background:T.gBg, border:`1px solid ${T.gBdr}`, borderRadius:12, padding:12, marginTop:10 }}>
-                        <div style={{ fontSize:12, fontWeight:800, color:T.green, marginBottom:4 }}>✅ SINYAL AKUMULASI INSTITUSI</div>
-                        <div style={{ fontSize:12, color:T.t2 }}>
-                          {brokerSummary.filter(b=>b.tier===1&&b.net>0).map(b=>b.code).join(" + ")} net buy bersama → kemungkinan ada akumulasi institusi asing.
-                        </div>
-                      </div>
-                    )}
-                    {brokerSummary.filter(b => b.tier === 3 && b.net > 0).length >= 1 &&
-                     brokerSummary.filter(b => b.tier === 1 && b.net < 0).length >= 1 && (
-                      <div style={{ background:T.rBg, border:`1px solid ${T.rBdr}`, borderRadius:12, padding:12, marginTop:10 }}>
-                        <div style={{ fontSize:12, fontWeight:800, color:T.red, marginBottom:4 }}>⚠ SINYAL DISTRIBUSI</div>
-                        <div style={{ fontSize:12, color:T.t2 }}>
-                          Asing net sell + retail ({brokerSummary.filter(b=>b.tier===3&&b.net>0).map(b=>b.code).join(", ")}) net buy → bandar kemungkinan distribusi ke retail.
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div style={{ textAlign:"center", padding:"16px 0", color:T.t3, fontSize:13 }}>
-                    Pilih kode saham di atas untuk melihat broker summary
-                  </div>
-                )}
-              </Card>
-
-              {/* ── Panduan Singkat ── */}
-              <Card style={{ borderTop:`3px solid ${T.em}` }}>
-                <SectionLabel>📖 CARA BACA SINYAL BANDAR</SectionLabel>
-                {[
-                  { icon:"🟢", title:"Volume ≥5× + AK/ZP net buy", desc:"Sinyal akumulasi terkuat. Institusi global masuk." },
-                  { icon:"🟡", title:"Volume ≥2× tanpa berita", desc:"Monitor 2–3 hari. Bisa jadi awal akumulasi." },
-                  { icon:"🔴", title:"Asing net sell + retail ramai beli", desc:"Kemungkinan distribusi. Hindari entry baru." },
-                  { icon:"⚡", title:"Catalyst H-14 di saham porto", desc:"Pertimbangkan averaging up sebelum event." },
-                ].map(({ icon, title, desc }) => (
-                  <div key={title} style={{ display:"flex", gap:12, padding:"10px 0", borderBottom:`1px solid ${T.bdr}` }}>
-                    <span style={{ fontSize:20, flexShrink:0 }}>{icon}</span>
-                    <div>
-                      <div style={{ fontSize:13, fontWeight:800, color:T.t1, marginBottom:3 }}>{title}</div>
-                      <div style={{ fontSize:12, color:T.t3 }}>{desc}</div>
-                    </div>
-                  </div>
-                ))}
-              </Card>
-
-            </div>
-          )
-        })()}
 
         {/* ══ STRATEGI & SIMULASI ══ */}
         {tab==="strategi" && (() => {
@@ -2760,26 +2321,122 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         </Modal>
 
         {/* ══ EDIT POSISI MODAL ══ */}
-        <Modal open={editModal} onClose={()=>setEditModal(false)} title={`Edit Posisi ${editPos?.stock_code}`} subtitle="Koreksi data avg price atau jumlah lot">
-          <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:14,padding:"12px 16px",marginBottom:20 }}>
-            <div style={{ fontSize:11,fontWeight:800,color:T.red,marginBottom:4 }}>⚠ PERHATIAN</div>
-            <div style={{ fontSize:12,color:T.red,lineHeight:1.5 }}>Fitur ini untuk koreksi data (misalnya average kurang tepat). Ini TIDAK mencatat transaksi baru di jurnal.</div>
-          </div>
-          <div style={{ background:T.bg2,borderRadius:14,padding:"12px 16px",marginBottom:20,display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
-            <div><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>AVG SAAT INI</div><div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>Rp {formatHarga(editPos?.avg_price)}</div></div>
-            <div style={{ textAlign:"right" }}><div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>LOT SAAT INI</div><div style={{ fontSize:15,fontWeight:800,color:T.t1 }}>{editPos?.lot} Lot</div></div>
-          </div>
-          <Input label="AVG PRICE BARU (Rp)" type="number" prefix="Rp" value={editAvg} onChange={e=>setEditAvg(e.target.value)}/>
-          <Input label="JUMLAH LOT BARU" type="number" value={editLot} onChange={e=>setEditLot(e.target.value)}/>
-          {editAvg && editLot && (
-            <div style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,borderRadius:14,padding:"12px 16px",marginBottom:16 }}>
-              <div style={{ display:"flex",justifyContent:"space-between" }}>
-                <span style={{ fontSize:12,color:T.t3 }}>Modal baru</span>
-                <span style={{ fontSize:14,fontWeight:800,color:T.t1 }}>Rp {new Intl.NumberFormat("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2}).format(rp(parseInt(editLot)*100*parsePrice(editAvg)))}</span>
+        <Modal open={editModal} onClose={()=>{ setEditModal(false); setEditPos(null); setEditNominal(""); setEditMode("avg") }} title={`Sinkronisasi Posisi ${editPos?.stock_code}`} subtitle="Samakan dengan data di aplikasi sekuritas kamu">
+
+          {/* ── Data saat ini ── */}
+          <div style={{ background:T.bg2,borderRadius:14,padding:"12px 16px",marginBottom:16,display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10 }}>
+            <div>
+              <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:4,letterSpacing:"0.5px" }}>AVG SEKARANG</div>
+              <div style={{ fontSize:14,fontWeight:800,color:T.t1 }}>Rp {formatHarga(editPos?.avg_price)}</div>
+            </div>
+            <div style={{ textAlign:"center" }}>
+              <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:4,letterSpacing:"0.5px" }}>LOT</div>
+              <div style={{ fontSize:14,fontWeight:800,color:T.t1 }}>{editPos?.lot}</div>
+            </div>
+            <div style={{ textAlign:"right" }}>
+              <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:4,letterSpacing:"0.5px" }}>TOTAL MODAL</div>
+              <div style={{ fontSize:14,fontWeight:800,color:T.em }}>
+                Rp {new Intl.NumberFormat("id-ID",{notation:"compact",maximumFractionDigits:1}).format((editPos?.lot||0)*100*(editPos?.avg_price||0))}
               </div>
             </div>
+          </div>
+
+          {/* ── Mode toggle ── */}
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:18 }}>
+            {[
+              { id:"avg",     label:"Input Harga Avg",    sub:"Masukkan avg per lembar" },
+              { id:"nominal", label:"Input Total Modal",  sub:"Masukkan nominal Rupiah" },
+            ].map(m => (
+              <button key={m.id} onClick={()=>setEditMode(m.id)}
+                style={{ padding:"10px 12px",borderRadius:12,border:`2px solid ${editMode===m.id?T.em:T.bdr2}`,
+                  background:editMode===m.id?T.emBg:T.bg2,cursor:"pointer",textAlign:"left",transition:"all .15s" }}>
+                <div style={{ fontSize:12,fontWeight:800,color:editMode===m.id?T.em:T.t1,marginBottom:2 }}>{m.label}</div>
+                <div style={{ fontSize:10,color:T.t3 }}>{m.sub}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* ── Input lot (selalu ada) ── */}
+          <Input label="JUMLAH LOT SEKARANG" type="number" hint="Sesuaikan dengan di aplikasi sekuritas" value={editLot} onChange={e=>setEditLot(e.target.value)}/>
+
+          {/* ── Input sesuai mode ── */}
+          {editMode === "avg" ? (
+            <Input label="HARGA AVERAGE (Rp/lembar)" type="number" prefix="Rp"
+              hint="Lihat di kolom 'Avg Price' atau 'HPP' di sekuritas kamu"
+              value={editAvg} onChange={e=>setEditAvg(e.target.value)}/>
+          ) : (
+            <Input label="TOTAL MODAL DIINVESTASIKAN (Rp)" type="number" prefix="Rp"
+              hint="Lihat kolom 'Nilai Beli' atau 'Modal' di sekuritas kamu — sistem hitung avg otomatis"
+              value={editNominal} onChange={e=>setEditNominal(e.target.value)}/>
           )}
-          <Btn full onClick={handleEdit}>Simpan Perubahan</Btn>
+
+          {/* ── Preview hasil ── */}
+          {(() => {
+            const lot_  = parseInt(editLot) || 0
+            const shares_ = lot_ * 100
+            let previewAvg = 0, previewNominal = 0, valid = false
+
+            if (editMode === "avg") {
+              previewAvg     = parsePrice(editAvg)
+              previewNominal = rp(shares_ * previewAvg)
+              valid = previewAvg > 0 && lot_ > 0
+            } else {
+              previewNominal = parsePrice(editNominal)
+              previewAvg     = shares_ > 0 ? rp(previewNominal / shares_) : 0
+              valid = previewNominal > 0 && lot_ > 0
+            }
+
+            const live_    = liveCache[editPos?.stock_code]?.price || editPos?.avg_price || 0
+            const curVal_  = shares_ * live_
+            const pnlRp_   = rp(curVal_ - previewNominal)
+            const pnlPct_  = previewNominal > 0 ? rp((pnlRp_ / previewNominal) * 100) : 0
+            const isProfit = pnlRp_ >= 0
+
+            if (!valid) return null
+            return (
+              <div style={{ background:T.bg2,border:`1px solid ${T.bdr2}`,borderRadius:14,padding:14,marginBottom:16 }}>
+                <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:10,letterSpacing:"0.5px" }}>PREVIEW SETELAH DISIMPAN</div>
+                <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10 }}>
+                  <div style={{ background:T.bg3,borderRadius:10,padding:"10px 12px" }}>
+                    <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:4 }}>AVG PRICE BARU</div>
+                    <div style={{ fontSize:16,fontWeight:900,color:T.em }}>Rp {formatHarga(previewAvg)}</div>
+                    {editMode==="nominal" && <div style={{ fontSize:10,color:T.t3,marginTop:2 }}>dihitung otomatis</div>}
+                  </div>
+                  <div style={{ background:T.bg3,borderRadius:10,padding:"10px 12px" }}>
+                    <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:4 }}>TOTAL MODAL</div>
+                    <div style={{ fontSize:16,fontWeight:900,color:T.t1 }}>
+                      Rp {new Intl.NumberFormat("id-ID",{notation:"compact",maximumFractionDigits:1}).format(previewNominal)}
+                    </div>
+                    {editMode==="avg" && <div style={{ fontSize:10,color:T.t3,marginTop:2 }}>{lot_} lot × 100 × {formatHarga(previewAvg)}</div>}
+                  </div>
+                </div>
+                {live_ > 0 && (
+                  <div style={{ background:isProfit?T.gBg:T.rBg,border:`1px solid ${isProfit?T.gBdr:T.rBdr}`,borderRadius:10,padding:"10px 12px",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                    <div>
+                      <div style={{ fontSize:9,fontWeight:800,color:T.t3,marginBottom:2 }}>P&L VS HARGA LIVE</div>
+                      <div style={{ fontSize:11,color:T.t3 }}>Live Rp {formatHarga(live_)}</div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:16,fontWeight:900,color:isProfit?T.green:T.red }}>
+                        {isProfit?"+":""}{pnlPct_.toFixed(2)}%
+                      </div>
+                      <div style={{ fontSize:11,color:isProfit?T.green:T.red }}>
+                        {isProfit?"+":""}{pnlRp_ >= 0 ? "" : "-"}Rp {Math.abs(pnlRp_).toLocaleString("id-ID",{maximumFractionDigits:0})}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
+
+          <div style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:12,padding:"10px 14px",marginBottom:16 }}>
+            <div style={{ fontSize:11,color:T.amber,lineHeight:1.5 }}>
+              ℹ️ Perubahan ini <strong>tidak mencatat transaksi baru</strong> di jurnal. Hanya menyinkronkan data porto dengan sekuritas kamu.
+            </div>
+          </div>
+
+          <Btn full onClick={handleEdit}>💾 Simpan & Sinkronkan</Btn>
         </Modal>
 
         <Modal open={sellModal} onClose={()=>setSellModal(false)} title={`Jual ${sellStock?.stock_code}`} subtitle="Amankan Profit atau Cut Loss sesuai Trading Plan">
