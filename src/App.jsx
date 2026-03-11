@@ -315,11 +315,12 @@ const StatCard = ({ label, value, sub, col, bg, bdr, icon: Icon }) => {
   const valStr  = String(value||"")
   // Longer string → smaller font. Short (≤6 chars like "29%") → large
   const valLen  = valStr.replace(/[^\d.,]/g,"").length  // count digits only
-  const valSize = valLen <= 3  ? 26
-                : valLen <= 5  ? 22
-                : valLen <= 7  ? 18
-                : valLen <= 10 ? 15
-                :                13
+  // Smaller sizes than before — prevents overflow in 3-col grid
+  const valSize = valLen <= 2  ? 24
+                : valLen <= 4  ? 20
+                : valLen <= 6  ? 16
+                : valLen <= 8  ? 14
+                :                12
   return (
     <div style={{ background:bg||T.bg2,border:`1px solid ${bdr||T.bdr}`,borderRadius:18,padding:"14px 12px",minWidth:0,overflow:"hidden" }}>
       {/* Icon — monochrome, no color, muted */}
@@ -332,15 +333,14 @@ const StatCard = ({ label, value, sub, col, bg, bdr, icon: Icon }) => {
       <div style={{ fontSize:9,fontWeight:800,color:col||T.t3,letterSpacing:"0.8px",marginBottom:5,textTransform:"uppercase",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>
         {label}
       </div>
-      {/* Value — single line, scales down for long numbers */}
+      {/* Value — auto-scale, wrap allowed to prevent ellipsis on amounts */}
       <div style={{
         fontSize:valSize,
         fontWeight:900,
         color:col||T.t1,
-        lineHeight:1.15,
-        whiteSpace:"nowrap",
-        overflow:"hidden",
-        textOverflow:"ellipsis",
+        lineHeight:1.2,
+        wordBreak:"break-word",
+        overflowWrap:"anywhere",
         maxWidth:"100%",
       }}>
         {value}
@@ -1365,12 +1365,12 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
               {/* ── Quick actions ── */}
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20 }}>
-                <button onClick={()=>{ setAddModal(true) }}
+                <button onClick={()=>setTab("screener")}
                   style={{ background:T.emBg,border:`1px solid ${T.em}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
-                  <Plus size={18} color={T.em}/>
+                  <Search size={18} color={T.em}/>
                   <div style={{ textAlign:"left" }}>
-                    <div style={{ fontSize:13,fontWeight:800,color:T.em }}>Beli Saham</div>
-                    <div style={{ fontSize:10,color:T.t3 }}>Tambah posisi baru</div>
+                    <div style={{ fontSize:13,fontWeight:800,color:T.em }}>Cari & Beli</div>
+                    <div style={{ fontSize:10,color:T.t3 }}>Cari saham dulu di Screener</div>
                   </div>
                 </button>
                 <button onClick={()=>setTab("jurnal")}
@@ -1454,7 +1454,15 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                           {topics[eduTab].sections.map((sec,j)=>(
                             <div key={j} style={{ marginBottom:16,paddingBottom:16,borderBottom:j<topics[eduTab].sections.length-1?`1px solid ${T.bdr}`:"none" }}>
                               <div style={{ fontSize:12,fontWeight:800,color:T.em,marginBottom:6 }}>{sec.head}</div>
-                              <div style={{ fontSize:12,color:T.t2,lineHeight:1.65,whiteSpace:"pre-line" }}>{sec.body}</div>
+                              <div style={{ fontSize:12,color:T.t2,lineHeight:1.7 }}>
+                                {sec.body.split("\n").map((line,li)=>(
+                                  line.trim() ? (
+                                    <p key={li} style={{ margin:"0 0 6px 0",paddingLeft:line.match(/^\d+\./)?"2px":0 }}>
+                                      {line}
+                                    </p>
+                                  ) : null
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1805,7 +1813,29 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 <h2 style={{ fontSize:28,fontWeight:900,color:T.t1,marginBottom:4 }}>Buku Jurnal</h2>
                 <p style={{ fontSize:13,color:T.t2 }}>{journal.length} Transaksi Tercatat</p>
               </div>
-              <Btn variant="secondary" icon={<Download size={14}/>} onClick={()=>exportDataToCSV(journal)} style={{ padding:"10px 16px",fontSize:13 }}>CSV</Btn>
+              <Btn variant="secondary" icon={<Download size={14}/>} onClick={()=>{
+                  // Custom export dengan kolom Alasan
+                  const headers = ["Tanggal","Aksi","Kode","Lot","Harga","Nominal (Rp)","Realized PnL (Rp)","Alasan"]
+                  const rows = journal.map(r=>{
+                    let notes="—"
+                    try{ notes=JSON.parse(r.suggestions||"[]").find(x=>x.t==="note")?.msg||"—" }catch{}
+                    const isT=r.stock_code==="__TOPUP__"
+                    const aksi=isT?"TOPUP":_jType(r,"SELL")?"JUAL":"BELI"
+                    return [
+                      r.date||"", aksi, isT?"—":r.stock_code||"",
+                      r.lot||0, r.close_price||0,
+                      Math.round(r.pos_val||(r.lot*100*r.close_price)||0),
+                      Math.round(r.pnl||0),
+                      `"${notes}"` // wrap in quotes to handle commas
+                    ]
+                  })
+                  const csv = [headers.join(","),...rows.map(r=>r.join(","))].join("\n")
+                  const blob = new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"})
+                  const a = document.createElement("a")
+                  a.href = URL.createObjectURL(blob)
+                  a.download = `Jurnal_InvestGuard_${new Date().toISOString().slice(0,10)}.csv`
+                  a.click()
+                }} style={{ padding:"10px 16px",fontSize:13 }}>CSV</Btn>
             </div>
 
             {/* Summary */}
