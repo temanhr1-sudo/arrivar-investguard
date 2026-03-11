@@ -432,6 +432,8 @@ export default function App() {
   const [pushLoading,    setPushLoading]    = useState(false)
   const [notifLog,       setNotifLog]       = useState([])   // per user, reset on signout
   const [notifBadge,     setNotifBadge]     = useState(0)
+  const [eduOpen,        setEduOpen]        = useState(false)
+  const [eduTab,         setEduTab]         = useState(0)
   const [showNotifPanel, setShowNotifPanel] = useState(false)
   const notifUserRef = React.useRef(null)  // track which user owns notifLog
 
@@ -1144,12 +1146,14 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
         {/* ══ HOME DASHBOARD ══ */}
         {tab==="home" && (() => {
           const live_       = liveCache
-          const totalEquity_ = (profile?.capital||0)
+          const totalEquity_ = 0 // unused, pakai totalEq_ di bawah
           const invested_   = portfolio.reduce((s,p)=>s+(p.shares*p.avg_price),0)
           const curVal_     = portfolio.reduce((s,p)=>s+(p.shares*(live_[p.stock_code]?.price||p.close_price||p.avg_price)),0)
+          const capital_    = Number(profile?.capital)||0
           const unrealPnL_  = curVal_ - invested_
-          const unrealPct_  = invested_>0 ? (unrealPnL_/invested_)*100 : 0
-          const cash_       = Math.max(0,(profile?.capital||0)-invested_)
+          const totalEq_    = capital_ + unrealPnL_  // sama persis dengan Porto: capital + unrealPnL
+          const unrealPct_  = capital_>0 ? (unrealPnL_/capital_)*100 : 0  // basis capital, sama dgn Porto
+          const cash_       = Math.max(0, capital_ - invested_)
           const isUp_       = unrealPnL_ >= 0
 
           // Top 3 performers in portfolio
@@ -1251,8 +1255,8 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                   </span>
                 </div>
                 {/* Main value — big, bold, always readable */}
-                <div style={{ fontSize:"clamp(24px,7vw,36px)",fontWeight:900,color:T.t1,letterSpacing:"-0.5px",lineHeight:1,marginBottom:12 }}>
-                  {fmtC(curVal_+cash_)}
+                <div style={{ fontSize:"clamp(18px,5.5vw,28px)",fontWeight:900,color:T.t1,letterSpacing:"-0.5px",lineHeight:1.15,marginBottom:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>
+                  Rp {formatRupiah(totalEq_)}
                 </div>
                 {/* PnL row */}
                 <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
@@ -1360,7 +1364,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               )}
 
               {/* ── Quick actions ── */}
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20 }}>
                 <button onClick={()=>{ setAddModal(true) }}
                   style={{ background:T.emBg,border:`1px solid ${T.em}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
                   <Plus size={18} color={T.em}/>
@@ -1379,6 +1383,87 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 </button>
               </div>
 
+              {/* ── Edukasi Bandarmologi ── */}
+              {(() => {
+                const topics = [
+                  {
+                    title:"🔍 Bandarmologi",
+                    sections:[
+                      { head:"Apa itu Bandar?", body:"Bandar adalah pelaku pasar besar (institusi, hedge fund, atau grup modal besar) yang mampu menggerakkan harga saham. Mereka membeli dalam jumlah masif secara bertahap, menaikkan harga, lalu distribusi ke ritel." },
+                      { head:"Akumulasi Diam-diam", body:"Ciri akumulasi: volume naik tapi harga sideways atau turun tipis. Bandar sengaja tidak menaikkan harga agar bisa beli lebih murah. Pantau saham dengan volume 2-3× rata-rata tapi pergerakan harga <1%." },
+                      { head:"Distribusi & Trap", body:"Setelah harga naik signifikan, bandar mulai jual (distribusi). Tanda: harga naik tapi volume sangat tipis, atau ada candlestick 'shooting star' / 'bearish engulfing' di top. Ritel yang masuk saat ini menjadi korban." },
+                      { head:"Broker Flow IDX", body:"Di BEI, kode broker bisa dilihat di data transaksi. Bandar asing tier-1: AK (UBS), ZP (Maybank), YP (Mirae), YU (CGS). Bandar lokal institusi: CC (Mandiri/MOST), NI (BNI), OD (Danareksa). Jika mereka net buy masif → sinyal akumulasi." },
+                    ]
+                  },
+                  {
+                    title:"📊 Tape Reading",
+                    sections:[
+                      { head:"Bid-Ask Spread", body:"Spread sempit = likuiditas tinggi, bandar bisa keluar-masuk mudah. Spread lebar = waspadai manipulasi. Jika ask tiba-tiba hilang semua → demand shock, harga siap naik cepat." },
+                      { head:"Volume Spike Signal", body:"Volume spike 5× rata-rata + harga naik = breakout valid. Volume spike + harga turun = distribusi / kepanikan. Volume spike di level support dengan ekor bawah panjang = akumulasi agresif bandar." },
+                      { head:"Tape Reading Praktis", body:"Perhatikan transaksi besar (lot >500) yang masuk di bid — itu institusi akumulasi. Jika ada transaksi besar terus-menerus di ask → distribusi. Tools: RTI Business, Stockbit, atau IDX mobile." },
+                    ]
+                  },
+                  {
+                    title:"⏰ Catalyst Timing",
+                    sections:[
+                      { head:"Buy on Rumor, Sell on News", body:"Saham sering naik 1-2 minggu sebelum pengumuman positif (dividen besar, kontrak baru, rights issue baik). Setelah news keluar, harga sering turun karena bandar sudah jual. Strategi: beli saat rumor mulai beredar, jual sebelum atau saat news resmi." },
+                      { head:"Seasonal Pattern IDX", body:"Jan-Feb: Rally awal tahun (window dressing efek). Mar-Apr: Musim dividen — saham yield tinggi outperform. Sep-Oct: Koreksi musiman historis. Nov-Des: Window dressing akhir tahun oleh fund manager." },
+                      { head:"Corporate Action", body:"Rights issue dengan harga diskon besar → peluang arbitrase. Stock split → psikologis positif, volume naik. Dividen interim → harga naik H-2 ex-date, turun di ex-date. Gunakan tab Kalender di app ini untuk tracking." },
+                    ]
+                  },
+                  {
+                    title:"✅ Checklist Harian",
+                    sections:[
+                      { head:"Sebelum Market Buka (08:45)", body:"1. Cek IHSG futures & bursa Asia\n2. Review semua posisi — ada yang SL?\n3. Cek news emiten yang dipegang\n4. Siapkan watchlist hari ini\n5. Set alert SL/TP di app ini" },
+                      { head:"Saat Market (09:00-15:00)", body:"1. Pantau volume spike di Screener\n2. Jangan overtrading — max 2 transaksi/hari\n3. Jika IHSG turun >1.5% → tidak boleh beli baru\n4. Catat alasan setiap transaksi di Jurnal\n5. Jika loss >2% hari ini → STOP trading" },
+                      { head:"Setelah Market (15:30)", body:"1. Update jurnal semua transaksi\n2. Review porto — ada yang perlu di-cut?\n3. Hitung realized P&L hari ini\n4. Riset watchlist besok\n5. Evaluasi: apakah keputusan hari ini sesuai rencana?" },
+                    ]
+                  },
+                ]
+
+                return (
+                  <div style={{ marginBottom:8 }}>
+                    {/* Header toggle */}
+                    <button onClick={()=>setEduOpen(o=>!o)}
+                      style={{ width:"100%",background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:18,padding:"16px 18px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:eduOpen?8:0 }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                        <div style={{ width:36,height:36,borderRadius:10,background:T.bg3,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                          <Lightbulb size={18} color={T.t2} strokeWidth={1.6}/>
+                        </div>
+                        <div style={{ textAlign:"left" }}>
+                          <div style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Edukasi Bandarmologi</div>
+                          <div style={{ fontSize:10,color:T.t3 }}>Tape reading · Catalyst · Checklist harian</div>
+                        </div>
+                      </div>
+                      <ChevronDown size={18} color={T.t3} style={{ transform:eduOpen?"rotate(180deg)":"none",transition:"transform .25s" }}/>
+                    </button>
+
+                    {eduOpen && (
+                      <div className="fi" style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:18,overflow:"hidden" }}>
+                        {/* Tab bar */}
+                        <div style={{ display:"flex",overflowX:"auto",borderBottom:`1px solid ${T.bdr}`,padding:"0 12px" }} className="hide-scrollbar">
+                          {topics.map((t,i)=>(
+                            <button key={i} onClick={()=>setEduTab(i)}
+                              style={{ flexShrink:0,background:"none",border:"none",padding:"12px 14px",fontSize:11,fontWeight:eduTab===i?800:500,color:eduTab===i?T.em:T.t3,borderBottom:eduTab===i?`2px solid ${T.em}`:"2px solid transparent",cursor:"pointer",whiteSpace:"nowrap",transition:"all .2s" }}>
+                              {t.title}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Content */}
+                        <div style={{ padding:"16px 16px 20px",maxHeight:400,overflowY:"auto" }}>
+                          {topics[eduTab].sections.map((sec,j)=>(
+                            <div key={j} style={{ marginBottom:16,paddingBottom:16,borderBottom:j<topics[eduTab].sections.length-1?`1px solid ${T.bdr}`:"none" }}>
+                              <div style={{ fontSize:12,fontWeight:800,color:T.em,marginBottom:6 }}>{sec.head}</div>
+                              <div style={{ fontSize:12,color:T.t2,lineHeight:1.65,whiteSpace:"pre-line" }}>{sec.body}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
             </div>
           )
         })()}
@@ -1390,7 +1475,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24 }}>
                 <div>
                   <div style={{ fontSize:11,fontWeight:800,color:T.t3,letterSpacing:2,marginBottom:6 }}>TOTAL NET EQUITY</div>
-                  <div style={{ fontSize:"clamp(18px,5.5vw,30px)",fontWeight:900,color:T.t1,letterSpacing:"-0.5px",lineHeight:1.15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"calc(100vw - 200px)" }}>{fmtC(totalEquity)}</div>
+                  <div style={{ fontSize:"clamp(18px,5.5vw,30px)",fontWeight:900,color:T.t1,letterSpacing:"-0.5px",lineHeight:1.15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"calc(100vw - 200px)" }}>Rp {formatRupiah(totalEquity)}</div>
                   <div style={{ display:"inline-flex",alignItems:"center",gap:6,marginTop:12,background:unrealPnL>=0?T.gBg:T.rBg,border:`1px solid ${unrealPnL>=0?T.gBdr:T.rBdr}`,padding:"6px 14px",borderRadius:99 }}>
                     {unrealPnL>=0?<ArrowUpRight size={14} color={T.green}/>:<ArrowDownRight size={14} color={T.red}/>}
                     <span style={{ fontSize:13,fontWeight:800,color:unrealPnL>=0?T.green:T.red }}>
@@ -1601,7 +1686,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
         {/* ══ SCREENER ══ */}
         {tab==="screener" && (
-          <div className="fu" style={{ padding:"56px 20px 20px" }}>
+          <div className="fu" style={{ padding:"56px 16px 100px",maxWidth:480,margin:"0 auto" }}>
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24 }}>
               <div>
                 <h2 style={{ fontSize:28,fontWeight:900,color:T.t1,marginBottom:8 }}>Screener IDX</h2>
@@ -1652,16 +1737,16 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               {screenerList.map((s,i)=>(
                 <div key={s.c} className="fu" style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:20,animationDelay:`${i*0.03}s` }}>
                   <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16 }}>
-                    <div style={{ display:"flex",gap:12,alignItems:"center" }}>
-                      <div style={{ width:44,height:44,borderRadius:12,background:T.bg2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:900,color:T.t1,border:`1px solid ${T.bdr}` }}>{s.c.slice(0,2)}</div>
-                      <div>
-                        <div style={{ fontSize:18,fontWeight:900,color:T.t1 }}>{s.c}</div>
-                        <div style={{ fontSize:12,color:T.t3,maxWidth:160,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis" }}>{s.n}</div>
+                    <div style={{ display:"flex",gap:10,alignItems:"center",minWidth:0,flex:1 }}>
+                      <div style={{ width:40,height:40,borderRadius:10,background:T.bg2,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:900,color:T.t1,border:`1px solid ${T.bdr}`,flexShrink:0 }}>{s.c.slice(0,2)}</div>
+                      <div style={{ minWidth:0 }}>
+                        <div style={{ fontSize:17,fontWeight:900,color:T.t1 }}>{s.c}</div>
+                        <div style={{ fontSize:11,color:T.t3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"calc(100vw - 220px)" }}>{s.n}</div>
                       </div>
                     </div>
-                    <div style={{ textAlign:"right" }}>
-                      <div style={{ fontSize:11,fontWeight:800,color:T.t3,marginBottom:4 }}>HARGA LIVE</div>
-                      <div style={{ fontSize:18,fontWeight:900,color:(s.chgPct??s.chgpct)>=0?T.green:T.red }}>Rp {formatRupiah(s.price||0)}</div>
+                    <div style={{ textAlign:"right",flexShrink:0,minWidth:90 }}>
+                      <div style={{ fontSize:10,fontWeight:700,color:T.t3,marginBottom:3,letterSpacing:"0.5px" }}>HARGA LIVE</div>
+                      <div style={{ fontSize:16,fontWeight:900,color:(s.chgPct??s.chgpct)>=0?T.green:T.red,whiteSpace:"nowrap" }}>Rp {formatRupiah(s.price||0)}</div>
                       <div style={{ fontSize:12,fontWeight:700,color:(s.chgPct??s.chgpct)>=0?T.green:T.red }}>{(s.chgPct??s.chgpct)>=0?"+":""}{Number((s.chgPct??s.chgpct)||0).toFixed(2)}%</div>
                     </div>
                   </div>
