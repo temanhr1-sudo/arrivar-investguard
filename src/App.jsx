@@ -75,6 +75,10 @@ import { fetchBatchLiveQuotes, fetchSingleStockSearch } from "./lib/yahooApi"
 import { calculateMoneyManagement, generateAdvisorySuggestions } from "./lib/moneyManagement"
 import { POPULAR_IDX_SYMBOLS, DARK, LIGHT, getGlobalStyles } from "./lib/constants"
 
+// fmtC: formatRupiahCompact yang selalu ada prefix "Rp"
+// (formatRupiahCompact bawaan hanya tambah "Rp" untuk nilai < 1 juta)
+const fmtC = (v) => { const r = formatRupiahCompact(v); return r.startsWith("Rp") || r.startsWith("-Rp") ? r : (v < 0 ? "-Rp " : "Rp ") + r.replace(/^-/, "") }
+
 // ── Helper: parse harga dari input user (handle format ID & EN) ──
 // Contoh: "4.387,68" → 4387.68 | "4387,68" → 4387.68 | "4387.68" → 4387.68
 function parsePrice(raw) {
@@ -157,7 +161,7 @@ const Toast = ({ n }) => {
   const { T } = useTheme()
   if (!n) return null
   const s = { red:{bg:T.rBg,bdr:T.rBdr,col:T.red}, amber:{bg:T.aBg,bdr:T.aBdr,col:T.amber}, green:{bg:T.gBg,bdr:T.gBdr,col:T.green}, blue:{bg:T.lBg,bdr:T.lBdr,col:T.blue} }[n.type] || {bg:T.gBg,bdr:T.gBdr,col:T.green}
-  return <div className="fi" style={{ position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:9999,background:s.bg,border:`1px solid ${s.bdr}`,color:s.col,padding:"12px 24px",borderRadius:"99px",fontWeight:800,fontSize:14,boxShadow:"0 10px 40px rgba(0,0,0,0.4)",whiteSpace:"nowrap",maxWidth:"90vw",textAlign:"center" }}>{n.msg}</div>
+  return <div className="fi" style={{ position:"fixed",top:"max(20px, env(safe-area-inset-top) + 12px)",left:"50%",transform:"translateX(-50%)",zIndex:9999,background:s.bg,border:`1px solid ${s.bdr}`,color:s.col,padding:"10px 18px",borderRadius:"99px",fontWeight:700,fontSize:13,boxShadow:"0 8px 32px rgba(0,0,0,0.5)",maxWidth:"calc(100vw - 32px)",width:"max-content",textAlign:"center",wordBreak:"break-word",lineHeight:1.4 }}>{n.msg}</div>
 }
 
 const Spinner = ({ size=16 }) => {
@@ -256,26 +260,39 @@ const Advisory = ({ type, text }) => {
 
 const BottomNav = ({ tab, setTab }) => {
   const { T } = useTheme()
-  const items = [
-    { id:"portfolio", label:"Porto",     Icon:LayoutDashboard },
+  // Primary nav — always visible (5 items max for clean mobile)
+  const primary = [
+    { id:"home",      label:"Home",      Icon:LayoutDashboard },
+    { id:"portfolio", label:"Porto",     Icon:PieChart },
     { id:"screener",  label:"Screener",  Icon:Search },
     { id:"jurnal",    label:"Jurnal",    Icon:BookOpen },
     { id:"monitor",   label:"Monitor",   Icon:BarChart2 },
-    { id:"forecast",  label:"Forecast",  Icon:TrendingUp },
-    { id:"calendar",  label:"Kalender",  Icon:CalendarIcon },
-    { id:"strategi",  label:"Strategi",  Icon:Lightbulb },
   ]
+  const isActive = (id) => tab === id
+  const isPrimary = primary.some(p => p.id === tab)
+
   return (
-    <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100,background:T.navBg,backdropFilter:"blur(20px)",borderTop:`1px solid ${T.bdr2}`,display:"flex",padding:"10px 8px calc(10px + env(safe-area-inset-bottom))" }}>
-      {items.map(({ id, label, Icon }) => {
-        const active = tab===id
-        return (
-          <button key={id} onClick={()=>setTab(id)} style={{ background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:5,flex:1 }}>
-            <Icon size={22} color={active?T.em:T.t3} strokeWidth={active?2.5:2} style={{ transition:"all 0.2s",transform:active?"scale(1.15)":"scale(1)" }}/>
-            <span style={{ fontSize:10,fontWeight:active?800:600,color:active?T.em:T.t3,transition:"all 0.2s" }}>{label}</span>
-          </button>
-        )
-      })}
+    <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100 }}>
+      {/* Blur backdrop */}
+      <div style={{ position:"absolute",inset:0,background:T.navBg,backdropFilter:"blur(24px)",WebkitBackdropFilter:"blur(24px)",borderTop:`1px solid ${T.bdr2}` }}/>
+      <div style={{ position:"relative",display:"flex",alignItems:"center",padding:`10px 6px calc(10px + env(safe-area-inset-bottom))`,gap:2 }}>
+        {primary.map(({ id, label, Icon }) => {
+          const active = isActive(id)
+          return (
+            <button key={id} onClick={()=>setTab(id)}
+              style={{ flex:1,background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"4px 2px",position:"relative",minWidth:0 }}>
+              {/* Active pill bg */}
+              {active && (
+                <div style={{ position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:44,height:44,borderRadius:14,background:T.emBg,transition:"all .2s" }}/>
+              )}
+              <div style={{ position:"relative",width:44,height:44,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                <Icon size={20} color={active?T.em:T.t3} strokeWidth={active?2.5:1.8} style={{ transition:"all 0.2s" }}/>
+              </div>
+              <span style={{ fontSize:9,fontWeight:active?800:500,color:active?T.em:T.t3,transition:"all 0.2s",letterSpacing:"0.2px",lineHeight:1,maxWidth:52,textAlign:"center",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{label}</span>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -325,7 +342,7 @@ export default function App() {
   const [profile,       setProfile]       = useState(null)
   const [portfolio,     setPortfolio]     = useState([])
   const [journal,       setJournal]       = useState([])
-  const [tab,           setTab]           = useState("portfolio")
+  const [tab,           setTab]           = useState("home")
   const [toast,         setToast]         = useState(null)
   const [syncing,       setSyncing]       = useState(false)
   const [liveCache,     setLiveCache]     = useState({})
@@ -923,6 +940,52 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   if (!session) return (
     <ThemeCtx.Provider value={{ T, isDark, toggle:toggleTheme }}>
       <style>{getGlobalStyles(T,isDark)}</style>
+      <style>{`
+        /* ── Mobile Responsive Fixes ── */
+        * { -webkit-tap-highlight-color: transparent; }
+        
+        /* Prevent any element from exceeding viewport */
+        body > div, #root > div { max-width: 100vw; overflow-x: hidden; }
+        
+        /* Fix number/text overflow in small cards */
+        .num-fit { 
+          font-size: clamp(11px, 3.5vw, 16px) !important; 
+          word-break: break-all;
+          overflow-wrap: anywhere;
+        }
+        
+        /* Grid auto-fit for very small screens */
+        @media (max-width: 360px) {
+          .grid-3-auto { grid-template-columns: repeat(2, 1fr) !important; }
+        }
+        
+        /* Notification toast always fits */
+        .toast-safe {
+          max-width: calc(100vw - 24px) !important;
+          left: 12px !important;
+          right: 12px !important;
+          transform: none !important;
+          word-break: break-word !important;
+        }
+
+        /* Bottom nav safe area */
+        .bottom-nav-inner { 
+          padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
+        }
+
+        /* Input number — prevent zoom on iOS */
+        input[type="number"], input[type="text"] {
+          font-size: 16px !important;
+        }
+
+        /* Prevent text overflow in stat values */
+        .stat-val {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 100%;
+        }
+      `}</style>
       <Toast n={toast}/>
       <div style={{ minHeight:"100vh",background:`radial-gradient(circle at top left,${isDark?"#132742":T.bg3} 0%,${T.bg0} 60%)`,display:"flex",alignItems:"center",justifyContent:"center",padding:24 }}>
         <div className="fu" style={{ width:"100%",maxWidth:400 }}>
@@ -1033,6 +1096,181 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
       <div style={{ minHeight:"100vh",background:T.bg0,paddingBottom:100,maxWidth:500,margin:"0 auto" }}>
 
         {/* ══ PORTFOLIO ══ */}
+        {/* ══ HOME DASHBOARD ══ */}
+        {tab==="home" && (() => {
+          const live_       = liveCache
+          const totalEquity_ = (profile?.capital||0)
+          const invested_   = portfolio.reduce((s,p)=>s+(p.shares*p.avg_price),0)
+          const curVal_     = portfolio.reduce((s,p)=>s+(p.shares*(live_[p.stock_code]?.price||p.close_price||p.avg_price)),0)
+          const unrealPnL_  = curVal_ - invested_
+          const unrealPct_  = invested_>0 ? (unrealPnL_/invested_)*100 : 0
+          const cash_       = Math.max(0,(profile?.capital||0)-invested_)
+          const isUp_       = unrealPnL_ >= 0
+
+          // Top 3 performers in portfolio
+          const performers_ = [...portfolio]
+            .map(p => {
+              const lv = live_[p.stock_code]?.price || p.close_price || p.avg_price
+              return { ...p, pnlPct: p.avg_price>0?((lv-p.avg_price)/p.avg_price)*100:0, lv }
+            })
+            .sort((a,b) => b.pnlPct - a.pnlPct)
+            .slice(0, 3)
+
+          // Volume spikes from liveCache (quick calc)
+          const spikes_ = Object.entries(live_)
+            .filter(([,d]) => d.volume && d.averageVolume && d.volume/d.averageVolume >= 3)
+            .sort(([,a],[,b]) => (b.volume/b.averageVolume)-(a.volume/a.averageVolume))
+            .slice(0,3)
+
+          // Secondary menu tiles
+          const menuTiles = [
+            { id:"forecast",  icon:"📈", label:"Forecast",  desc:"Prediksi & sinyal" },
+            { id:"calendar",  icon:"📅", label:"Kalender",  desc:"Dividen & event" },
+            { id:"strategi",  icon:"💡", label:"Strategi",  desc:"Simulasi 20 thn" },
+          ]
+
+          return (
+            <div style={{ maxWidth:480,margin:"0 auto",padding:"16px 16px 120px" }}>
+
+              {/* ── Greeting ── */}
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
+                <div>
+                  <div style={{ fontSize:13,color:T.t3,marginBottom:2 }}>
+                    {new Date().toLocaleDateString("id-ID",{weekday:"long",day:"numeric",month:"long"})}
+                  </div>
+                  <div style={{ fontSize:22,fontWeight:900,color:T.t1,lineHeight:1.2 }}>
+                    Halo, {profile?.name?.split(" ")[0] || "Trader"} 👋
+                  </div>
+                </div>
+                <ThemeBtn/>
+              </div>
+
+              {/* ── Equity Card ── */}
+              <div style={{ background:`linear-gradient(135deg, ${isUp_?"#00553a":"#5a1a22"} 0%, ${T.bg1} 100%)`,border:`1px solid ${isUp_?T.gBdr:T.rBdr}`,borderRadius:24,padding:"22px 20px",marginBottom:16,position:"relative",overflow:"hidden" }}>
+                <div style={{ position:"absolute",top:-20,right:-20,width:120,height:120,borderRadius:"50%",background:isUp_?"rgba(0,214,138,0.08)":"rgba(255,69,96,0.08)" }}/>
+                <div style={{ fontSize:11,fontWeight:700,color:isUp_?T.green:T.red,letterSpacing:"1px",marginBottom:6 }}>TOTAL EKUITAS</div>
+                <div style={{ fontSize:34,fontWeight:900,color:T.t1,letterSpacing:"-1px",lineHeight:1,marginBottom:8 }}>
+                  {fmtC(curVal_+cash_)}
+                </div>
+                <div style={{ display:"flex",gap:16,flexWrap:"wrap" }}>
+                  <div style={{ fontSize:13,color:isUp_?T.green:T.red,fontWeight:700 }}>
+                    {isUp_?"+":""}{fmtC(unrealPnL_)} ({unrealPct_.toFixed(2)}%)
+                  </div>
+                  <div style={{ fontSize:12,color:T.t3 }}>Unrealized P&L</div>
+                </div>
+              </div>
+
+              {/* ── 3 stats mini ── */}
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16 }}>
+                {[
+                  { label:"PORTO", val:fmtC(curVal_),    color:T.em },
+                  { label:"CASH",  val:fmtC(cash_),      color:T.green },
+                  { label:"SAHAM", val:portfolio.length+" pos", color:T.blue },
+                ].map(({label,val,color}) => (
+                  <div key={label} onClick={()=>setTab("portfolio")} style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"12px 10px",cursor:"pointer" }}>
+                    <div style={{ fontSize:9,fontWeight:800,color:T.t3,letterSpacing:"1px",marginBottom:5 }}>{label}</div>
+                    <div style={{ fontSize:13,fontWeight:900,color,lineHeight:1.2,wordBreak:"break-word" }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Menu sekunder tiles ── */}
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16 }}>
+                {menuTiles.map(({id,icon,label,desc}) => (
+                  <button key={id} onClick={()=>setTab(id)}
+                    style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 10px",cursor:"pointer",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
+                    <span style={{ fontSize:24 }}>{icon}</span>
+                    <span style={{ fontSize:12,fontWeight:800,color:T.t1 }}>{label}</span>
+                    <span style={{ fontSize:10,color:T.t3,lineHeight:1.3 }}>{desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              {/* ── Top Performers ── */}
+              {performers_.length > 0 && (
+                <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:16,marginBottom:14 }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
+                    <div style={{ fontSize:11,fontWeight:800,color:T.t3,letterSpacing:"1px" }}>TOP POSISI PORTO</div>
+                    <button onClick={()=>setTab("portfolio")} style={{ fontSize:11,color:T.em,fontWeight:700,background:"none",border:"none",cursor:"pointer" }}>Lihat semua →</button>
+                  </div>
+                  {performers_.map((p,i) => {
+                    const isWin = p.pnlPct >= 0
+                    return (
+                      <div key={p.stock_code} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:i<performers_.length-1?`1px solid ${T.bdr}`:"none" }}>
+                        <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                          <div style={{ width:34,height:34,borderRadius:10,background:isWin?T.gBg:T.rBg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                            <span style={{ fontSize:11,fontWeight:900,color:isWin?T.green:T.red }}>{i+1}</span>
+                          </div>
+                          <div>
+                            <div style={{ fontSize:14,fontWeight:800,color:T.t1 }}>{p.stock_code}</div>
+                            <div style={{ fontSize:11,color:T.t3 }}>{p.lot} lot · Avg {fmtC(p.avg_price)}</div>
+                          </div>
+                        </div>
+                        <div style={{ textAlign:"right" }}>
+                          <div style={{ fontSize:14,fontWeight:900,color:isWin?T.green:T.red }}>{isWin?"+":""}{p.pnlPct.toFixed(2)}%</div>
+                          <div style={{ fontSize:11,color:T.t3 }}>Live {fmtC(p.lv)}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* ── Volume Spike Widget ── */}
+              {spikes_.length > 0 && (
+                <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:20,padding:16,marginBottom:14 }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
+                    <div style={{ fontSize:11,fontWeight:800,color:T.t3,letterSpacing:"1px" }}>🔥 VOLUME SPIKE</div>
+                    <button onClick={()=>setTab("screener")} style={{ fontSize:11,color:T.em,fontWeight:700,background:"none",border:"none",cursor:"pointer" }}>Screener →</button>
+                  </div>
+                  {spikes_.map(([code,d]) => {
+                    const ratio = (d.volume/d.averageVolume)
+                    const chg   = d.chgPct||d.changePercent||0
+                    return (
+                      <div key={code} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${T.bdr}` }}>
+                        <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                          <div style={{ width:34,height:34,borderRadius:10,background:T.rBg,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}>
+                            <span style={{ fontSize:10,fontWeight:900,color:T.red }}>🔥</span>
+                          </div>
+                          <div>
+                            <div style={{ fontSize:14,fontWeight:800,color:T.t1 }}>{code}</div>
+                            <div style={{ fontSize:11,color:T.t3 }}>{ratio.toFixed(1)}× volume rata-rata</div>
+                          </div>
+                        </div>
+                        <div style={{ textAlign:"right" }}>
+                          <div style={{ fontSize:14,fontWeight:900,color:chg>=0?T.green:T.red }}>{chg>=0?"+":""}{chg.toFixed(2)}%</div>
+                          <div style={{ fontSize:11,color:T.t3 }}>{fmtC(d.price||0)}</div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* ── Quick actions ── */}
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+                <button onClick={()=>{ setAddModal(true) }}
+                  style={{ background:T.emBg,border:`1px solid ${T.em}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
+                  <Plus size={18} color={T.em}/>
+                  <div style={{ textAlign:"left" }}>
+                    <div style={{ fontSize:13,fontWeight:800,color:T.em }}>Beli Saham</div>
+                    <div style={{ fontSize:10,color:T.t3 }}>Tambah posisi baru</div>
+                  </div>
+                </button>
+                <button onClick={()=>setTab("jurnal")}
+                  style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
+                  <BookOpen size={18} color={T.t2}/>
+                  <div style={{ textAlign:"left" }}>
+                    <div style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Jurnal</div>
+                    <div style={{ fontSize:10,color:T.t3 }}>{journal.length} transaksi</div>
+                  </div>
+                </button>
+              </div>
+
+            </div>
+          )
+        })()}
+
         {tab==="portfolio" && (
           <div className="fu">
             {/* Header */}
@@ -1074,7 +1312,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 </div>
               </div>
               <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16 }}>
-                {[["MODAL TERPAKAI",`Rp ${formatRupiahCompact(invested)}`],["NILAI PASAR",`Rp ${formatRupiahCompact(curVal)}`]].map(([l,v])=>(
+                {[["MODAL TERPAKAI",`${fmtC(invested)}`],["NILAI PASAR",`${fmtC(curVal)}`]].map(([l,v])=>(
                   <div key={l} style={{ background:T.bg2,border:`1px solid ${T.bdr}`,borderRadius:16,padding:14 }}>
                     <div style={{ fontSize:10,color:T.t3,fontWeight:800,marginBottom:4 }}>{l}</div>
                     <div style={{ fontSize:16,color:T.t1,fontWeight:800 }}>{v}</div>
@@ -1233,7 +1471,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                         </div>
                       </div>
                       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:7,marginBottom:12 }}>
-                        {[["AVG",`Rp ${formatHarga(pos.avg_price)}`,T.t2],["LIVE",`Rp ${formatHarga(live)}`,T.em],["MODAL",`Rp ${formatRupiahCompact(posVal)}`,T.t3]].map(([l,v,c])=>(
+                        {[["AVG",`Rp ${formatHarga(pos.avg_price)}`,T.t2],["LIVE",`Rp ${formatHarga(live)}`,T.em],["MODAL",`${fmtC(posVal)}`,T.t3]].map(([l,v,c])=>(
                           <div key={l} style={{ background:T.bg2,borderRadius:10,padding:"8px 10px" }}><div style={{ fontSize:9,color:T.t3,fontWeight:700,marginBottom:2 }}>{l}</div><div style={{ fontSize:11,fontWeight:800,color:c }}>{v}</div></div>
                         ))}
                       </div>
@@ -1269,7 +1507,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                           <div style={{ background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:10,padding:"10px 12px",marginBottom:7 }}>
                             <div style={{ fontSize:11,fontWeight:800,color:T.green,marginBottom:5 }}>Bisa Average Up (+5%)</div>
                             <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"3px 10px",fontSize:10 }}>
-                              {[["Maks beli",canLot+" lot"],["Avg baru","Rp "+formatHarga(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Biaya","Rp "+formatRupiahCompact(canRp)]].map(([l,v])=>(<div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.green }}>{v}</strong></div>))}
+                              {[["Maks beli",canLot+" lot"],["Avg baru","Rp "+formatHarga(newAvg)],["Alokasi baru",newAlloc.toFixed(1)+"%"],["Biaya",fmtC(canRp)]].map(([l,v])=>(<div key={l}><span style={{ color:T.t3 }}>{l}: </span><strong style={{ color:T.green }}>{v}</strong></div>))}
                             </div>
                           </div>
                           <button onClick={()=>{ setAddStock({c:pos.stock_code,s:pos.sector}); setBuyLot(String(canLot)); setBuyPrice(String(rp(live))); setAddModal(true) }} style={{ width:"100%",background:T.gBg,border:`1px solid ${T.gBdr}`,borderRadius:9,padding:"8px",fontSize:11,fontWeight:800,color:T.green,cursor:"pointer" }} className="tap">Avg Up {canLot} lot @ Rp {formatRupiah(live)}</button>
@@ -1469,7 +1707,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                       <div style={{ textAlign:"right" }}>
                         <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>{isSell?"REALIZED P&L":"TOTAL NILAI"}</div>
                         <div style={{ fontSize:15,fontWeight:900,color:isSell?getProfitColor(row.pnl,T):isTopup?T.blue:T.t1 }}>
-                          {isSell ? `${(row.pnl||0)>=0?"+":""}Rp ${formatHarga(row.pnl||0)}` : `Rp ${formatRupiahCompact(row.pos_val||(row.lot*100*row.close_price))}`}
+                          {isSell ? `${(row.pnl||0)>=0?"+":""}Rp ${formatHarga(row.pnl||0)}` : `${fmtC(row.pos_val||(row.lot*100*row.close_price))}`}
                         </div>
                       </div>
                     </div>
