@@ -68,7 +68,7 @@ import {
   Wallet, AlertTriangle, Target, PieChart, Trophy, Landmark,
   ShieldCheck, Shield, Info, Filter, Sun, Moon, CheckCircle,
   DollarSign, Activity, TrendingDown, BarChart, Percent,
-  RefreshCw, Bell, BellOff, Calendar as CalendarIcon, Crown, Lock, Zap, ChevronLeft, ChevronRight,
+  RefreshCw, Bell, BellOff, Calendar as CalendarIcon, Crown, Lock, Zap, ChevronLeft, ChevronRight, ChevronDown,
 } from "lucide-react"
 import { supabase }          from "./lib/supabase"
 import { fetchBatchLiveQuotes, fetchSingleStockSearch } from "./lib/yahooApi"
