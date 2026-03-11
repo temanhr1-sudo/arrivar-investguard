@@ -1187,8 +1187,57 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     Halo, {profile?.name?.split(" ")[0] || "Trader"} 👋
                   </div>
                 </div>
-                <ThemeBtn/>
+                <div style={{ display:"flex",gap:8,alignItems:"center" }}>
+                  <ThemeBtn/>
+                  {/* Bell button — pindah ke Home */}
+                  <button onClick={()=>{ if(!pushEnabled) requestPush(); else { setShowNotifPanel(p=>!p); setNotifBadge(0) } }}
+                    disabled={pushLoading} className="tap" title={pushEnabled?"Alert":"Aktifkan notifikasi"}
+                    style={{ position:"relative",background:pushEnabled?(notifBadge>0?T.rBg:T.bg2):T.bg2,border:`1px solid ${pushEnabled?(notifBadge>0?T.rBdr:T.bdr2):T.bdr2}`,borderRadius:12,padding:"9px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5,flexShrink:0 }}>
+                    {pushLoading ? <Spinner size={14}/> : pushEnabled ? <Bell size={15} color={notifBadge>0?T.red:T.t2}/> : <BellOff size={15} color={T.t3}/>}
+                    {notifBadge>0 && <span style={{ position:"absolute",top:-3,right:-3,minWidth:16,height:16,background:T.red,borderRadius:99,fontSize:9,fontWeight:900,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px" }}>{notifBadge}</span>}
+                  </button>
+                </div>
               </div>
+
+              {/* ── Notif Panel di Home ── */}
+              {showNotifPanel && (
+                <div className="fi" style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:18,marginBottom:12,overflow:"hidden" }}>
+                  <div style={{ padding:"12px 16px 8px",borderBottom:`1px solid ${T.bdr}`,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                    <div style={{ display:"flex",alignItems:"center",gap:7 }}>
+                      <Bell size={13} color={T.t2}/>
+                      <span style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Alert Push ({notifLog.length})</span>
+                    </div>
+                    <div style={{ display:"flex",gap:10,alignItems:"center" }}>
+                      {notifLog.length>0&&<button onClick={()=>{setNotifLog([]);setNotifBadge(0)}} style={{ fontSize:10,fontWeight:700,color:T.t3,background:"none",border:"none",cursor:"pointer" }}>Hapus semua</button>}
+                      <button onClick={()=>setShowNotifPanel(false)} style={{ background:T.bg2,border:"none",borderRadius:7,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }} className="tap"><X size={11} color={T.t2}/></button>
+                    </div>
+                  </div>
+                  <div style={{ maxHeight:260,overflowY:"auto" }}>
+                    {notifLog.length===0 ? (
+                      <div style={{ padding:"20px",textAlign:"center",color:T.t3,fontSize:12,lineHeight:1.5 }}>Belum ada alert.<br/>Sistem cek otomatis setiap 30 detik.</div>
+                    ) : notifLog.map(n=>{
+                      const isSL=n.tag?.startsWith("sl"), isTP=n.tag?.startsWith("tp"), isAU=n.tag?.startsWith("au")
+                      const col=isSL?T.red:isTP?T.green:isAU?T.green:n.tag?.startsWith("warn")?T.amber:T.blue
+                      const bg=isSL?T.rBg:isTP||isAU?T.gBg:n.tag?.startsWith("warn")?T.aBg:T.lBg
+                      return (
+                        <div key={n.id} style={{ padding:"11px 16px",borderBottom:`1px solid ${T.bdr}`,background:bg }}>
+                          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,gap:8 }}>
+                            <span style={{ fontSize:12,fontWeight:800,color:col }}>{n.title}</span>
+                            <span style={{ fontSize:10,color:T.t3,flexShrink:0 }}>{n.time}</span>
+                          </div>
+                          <p style={{ fontSize:10,color:col,lineHeight:1.5,whiteSpace:"pre-line",opacity:0.85 }}>{n.body}</p>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  {!pushEnabled && (
+                    <div style={{ padding:"12px 16px",background:T.bg2,borderTop:`1px solid ${T.bdr}` }}>
+                      <button onClick={requestPush} disabled={pushLoading} style={{ width:"100%",background:T.em,color:"#fff",border:"none",borderRadius:10,padding:"10px",fontSize:12,fontWeight:800,cursor:"pointer" }} className="tap">🔔 Aktifkan Push Notification</button>
+                      <p style={{ fontSize:10,color:T.t3,textAlign:"center",marginTop:6 }}>Alert SL/TP/Avg langsung ke HP kamu</p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* ── Equity Card ── */}
               <div style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:22,padding:"20px",marginBottom:16,position:"relative",overflow:"hidden" }}>
@@ -1236,12 +1285,15 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
               {/* ── Menu sekunder tiles ── */}
               <div style={{ display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16 }}>
-                {menuTiles.map(({id,icon,label,desc}) => (
+                {menuTiles.map(({id,Ic,label,desc}) => (
                   <button key={id} onClick={()=>setTab(id)}
-                    style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 10px",cursor:"pointer",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:4 }}>
-                    <span style={{ fontSize:24 }}>{icon}</span>
-                    <span style={{ fontSize:12,fontWeight:800,color:T.t1 }}>{label}</span>
-                    <span style={{ fontSize:10,color:T.t3,lineHeight:1.3 }}>{desc}</span>
+                    style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 10px",cursor:"pointer",textAlign:"center",display:"flex",flexDirection:"column",alignItems:"center",gap:6 }}>
+                    {/* Icon container — sized box, icon monokrom */}
+                    <div style={{ width:40,height:40,borderRadius:12,background:T.bg3,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:2 }}>
+                      {Ic && <Ic size={20} color={T.t2} strokeWidth={1.6}/>}
+                    </div>
+                    <span style={{ fontSize:12,fontWeight:800,color:T.t1,lineHeight:1.2 }}>{label}</span>
+                    <span style={{ fontSize:9,color:T.t3,lineHeight:1.3 }}>{desc}</span>
                   </button>
                 ))}
               </div>
@@ -1319,7 +1371,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 </button>
                 <button onClick={()=>setTab("jurnal")}
                   style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
-                  <BookOpen size={18} color={T.t2}/>
+                  <BookOpen size={18} color={T.t2} strokeWidth={1.6}/>
                   <div style={{ textAlign:"left" }}>
                     <div style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Jurnal</div>
                     <div style={{ fontSize:10,color:T.t3 }}>{journal.length} transaksi</div>
@@ -1338,7 +1390,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24 }}>
                 <div>
                   <div style={{ fontSize:11,fontWeight:800,color:T.t3,letterSpacing:2,marginBottom:6 }}>TOTAL NET EQUITY</div>
-                  <div style={{ fontSize:36,fontWeight:900,color:T.t1,letterSpacing:"-1px",lineHeight:1 }}>Rp {formatRupiah(totalEquity)}</div>
+                  <div style={{ fontSize:"clamp(18px,5.5vw,30px)",fontWeight:900,color:T.t1,letterSpacing:"-0.5px",lineHeight:1.15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:"calc(100vw - 200px)" }}>{fmtC(totalEquity)}</div>
                   <div style={{ display:"inline-flex",alignItems:"center",gap:6,marginTop:12,background:unrealPnL>=0?T.gBg:T.rBg,border:`1px solid ${unrealPnL>=0?T.gBdr:T.rBdr}`,padding:"6px 14px",borderRadius:99 }}>
                     {unrealPnL>=0?<ArrowUpRight size={14} color={T.green}/>:<ArrowDownRight size={14} color={T.red}/>}
                     <span style={{ fontSize:13,fontWeight:800,color:unrealPnL>=0?T.green:T.red }}>
@@ -1349,12 +1401,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8 }}>
                   <div style={{ display:"flex",gap:7 }}>
                     <ThemeBtn/>
-                    <button onClick={()=>{ if(!pushEnabled) requestPush(); else { setShowNotifPanel(p=>!p); setNotifBadge(0) } }}
-                      disabled={pushLoading} className="tap" title={pushEnabled?"Notifikasi":"Aktifkan notifikasi"}
-                      style={{ position:"relative",background:pushEnabled?T.lBg:T.bg2,border:`1px solid ${pushEnabled?T.lBdr:T.bdr2}`,borderRadius:12,padding:"9px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:5 }}>
-                      {pushEnabled?<Bell size={15} color={T.blue}/>:<BellOff size={15} color={T.t3}/>}
-                      {notifBadge>0&&<span style={{ position:"absolute",top:3,right:3,width:8,height:8,background:T.red,borderRadius:"50%" }}/>}
-                    </button>
+
                     {subStatus==="trial" && trialDaysLeft<=7 && (
                       <button onClick={()=>setShowSubModal(true)} className="tap"
                         style={{ background:T.aBg,border:`1px solid ${T.aBdr}`,borderRadius:12,padding:"9px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:5 }}>
@@ -1393,43 +1440,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               </div>
             </div>
 
-            {/* ── Notif Panel ── */}
-            {showNotifPanel && (
-              <div className="fi" style={{ background:T.bg1,border:`1px solid ${T.lBdr}`,borderRadius:18,margin:"10px 16px 0",overflow:"hidden" }}>
-                <div style={{ padding:"12px 16px 8px",borderBottom:`1px solid ${T.bdr}`,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                  <div style={{ display:"flex",alignItems:"center",gap:7 }}>
-                    <Bell size={13} color={T.blue}/>
-                    <span style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Alert ({notifLog.length})</span>
-                  </div>
-                  <div style={{ display:"flex",gap:10,alignItems:"center" }}>
-                    {notifLog.length>0&&<button onClick={()=>{setNotifLog([]);setNotifBadge(0)}} style={{ fontSize:10,fontWeight:700,color:T.t3,background:"none",border:"none",cursor:"pointer" }}>Hapus</button>}
-                    <button onClick={()=>setShowNotifPanel(false)} style={{ background:T.bg2,border:"none",borderRadius:7,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center" }} className="tap"><X size={11} color={T.t2}/></button>
-                  </div>
-                </div>
-                <div style={{ maxHeight:280,overflowY:"auto" }}>
-                  {notifLog.length===0 ? (
-                    <div style={{ padding:"20px",textAlign:"center",color:T.t3,fontSize:12 }}>Belum ada alert. Cek otomatis setiap 30 detik saat live.</div>
-                  ) : notifLog.map(n=>{
-                    const isSL=n.tag?.startsWith("sl"), isTP=n.tag?.startsWith("tp"), isAU=n.tag?.startsWith("au")
-                    const col=isSL?T.red:isTP?T.green:isAU?T.green:n.tag?.startsWith("warn")?T.amber:T.blue
-                    const bg=isSL?T.rBg:isTP||isAU?T.gBg:n.tag?.startsWith("warn")?T.aBg:T.lBg
-                    return (
-                      <div key={n.id} style={{ padding:"11px 16px",borderBottom:`1px solid ${T.bdr}`,background:bg }}>
-                        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4 }}>
-                          <span style={{ fontSize:12,fontWeight:800,color:col }}>{n.title}</span>
-                          <span style={{ fontSize:10,color:T.t3,marginLeft:8 }}>{n.time}</span>
-                        </div>
-                        <p style={{ fontSize:10,color:col,lineHeight:1.5,whiteSpace:"pre-line",opacity:0.85 }}>{n.body}</p>
-                      </div>
-                    )
-                  })}
-                </div>
-                {!pushEnabled && <div style={{ padding:"12px 16px",background:T.bg2,borderTop:`1px solid ${T.bdr}` }}>
-                  <button onClick={requestPush} disabled={pushLoading} style={{ width:"100%",background:T.blue,color:"#fff",border:"none",borderRadius:10,padding:"10px",fontSize:12,fontWeight:800,cursor:"pointer" }} className="tap">🔔 Aktifkan Push Notification</button>
-                  <p style={{ fontSize:10,color:T.t3,textAlign:"center",marginTop:6 }}>Alert SL/TP/Avg langsung ke HP kamu</p>
-                </div>}
-              </div>
-            )}
+
 
             <div style={{ padding:"20px 20px 0" }}>
               {cashStatus!=="green" && (
