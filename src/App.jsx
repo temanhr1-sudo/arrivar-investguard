@@ -505,14 +505,14 @@ export default function App() {
     // ── Tahap 2: Fetch harga real-time dari /api/idx-quote (semua saham, paginasi) ──
     let allStocks = []
     try {
-      const PSIZE = 200
+      const PSIZE = 150  // IDX limit max 150 per request (dari IDX-Scrapper)
       // Ambil halaman pertama untuk tahu total
       const r0 = await fetch(`/api/idx-quote?all=1&page=0&size=${PSIZE}`, { signal: AbortSignal.timeout(20000) })
       if (r0.ok) {
         const d0  = await r0.json()
         allStocks = d0.data || []
         const total = d0.total || allStocks.length
-        const pages = Math.min(Math.ceil(total / PSIZE), 6) // max 6 halaman = 1200 saham
+        const pages = Math.min(Math.ceil(total / PSIZE), 9) // max 9×150 = 1350 saham IDX
 
         // Fetch halaman berikutnya secara parallel
         if (pages > 1) {
