@@ -566,7 +566,7 @@ export default function App() {
       setLiveCache(p => ({ ...p, ...dict }))
       setLastSync(getCurrentTimeString())
       setScreenerLoaded(true)
-      notify(`✓ ${arr.length} saham IDX real-time · sumber: IDX.co.id`, "green")
+      notify(`Sync berhasil · ${arr.length} saham`, "green")
       setSyncing(false)
       return
     }
@@ -584,7 +584,7 @@ export default function App() {
       const dict = {}; arr.forEach(s => { dict[s.c] = s })
       setLiveCache(p => ({ ...p, ...dict }))
       setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
-      notify(`✓ ${arr.length} saham (data statis — IDX tidak tersedia)`, "amber")
+      notify(`Data statis dimuat · ${arr.length} saham`, "amber")
       setSyncing(false)
       return
     }
@@ -597,8 +597,8 @@ export default function App() {
       const dict = {}; arr.forEach(i => { dict[i.c] = i })
       setLiveCache(p => ({ ...p, ...dict }))
       setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
-      notify(`✓ ${arr.length} saham (Yahoo fallback)`, "amber")
-    } catch(e) { notify("Error memuat screener: " + e.message, "red") }
+      notify(`Reload · ${arr.length} saham`, "amber")
+    } catch(e) { notify("Sync gagal — coba refresh", "red") }
     setSyncing(false)
   }, [notify])
 
@@ -915,14 +915,43 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
   const handleSearch = async (e) => {
     e.preventDefault()
-    const q = screenerQ.trim(); if (!q) return
+    const q = screenerQ.trim().toUpperCase(); if (!q) return
     setSearching(true)
-    const r = await fetchSingleStockSearch(q)
-    if (r) {
-      setScreenerData(p => p.find(s=>s.c===r.c) ? p.map(s=>s.c===r.c?r:s) : [r,...p])
-      setLiveCache(p=>({...p,[r.c]:r}))
-      notify(`✓ Data live ${r.c} berhasil ditarik!`,"green")
-    } else { notify(`Kode ${q.toUpperCase()} tidak ditemukan`,"red") }
+    try {
+      let liveData = null
+      try {
+        const ir = await fetch(`/api/idx-quote?code=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(10000) })
+        if (ir.ok) { const d = await ir.json(); if (d?.data?.price) liveData = d.data }
+      } catch {}
+      if (!liveData) {
+        const yr = await fetchSingleStockSearch(q)
+        if (yr) liveData = { code: yr.c, name: yr.n, price: yr.price, chgPct: yr.chgPct,
+          pe: yr.pe, pbv: yr.pbv, dy: yr.dy, roe: yr.roe, der: yr.der, npm: yr.npm,
+          volume: yr.volume, high: yr.high, low: yr.low }
+      }
+      if (liveData) {
+        const code = (liveData.code || liveData.c || q).toUpperCase()
+        const existing = screenerData.find(s => s.c === code) || {}
+        const merged = {
+          ...existing, c: code,
+          n:      liveData.name || liveData.n || existing.n || code,
+          price:  liveData.price  || existing.price  || 0,
+          chgPct: liveData.chgPct ?? existing.chgPct ?? 0,
+          volume: liveData.volume || existing.volume || 0,
+          high:   liveData.high   || existing.high   || 0,
+          low:    liveData.low    || existing.low     || 0,
+          pe:  (liveData.pe  > 0 ? liveData.pe  : existing.pe)  || 0,
+          pbv: (liveData.pbv > 0 ? liveData.pbv : existing.pbv) || 0,
+          dy:  (liveData.dy  > 0 ? liveData.dy  : existing.dy)  || 0,
+          roe: (liveData.roe > 0 ? liveData.roe : existing.roe) || 0,
+          der: (liveData.der > 0 ? liveData.der : existing.der) || 0,
+          npm: (liveData.npm > 0 ? liveData.npm : existing.npm) || 0,
+        }
+        setScreenerData(p => p.find(s => s.c === code) ? p.map(s => s.c === code ? merged : s) : [merged, ...p])
+        setLiveCache(p => ({ ...p, [code]: merged }))
+        notify(`${code} ditemukan`, "green")
+      } else { notify(`${q} tidak ditemukan`, "red") }
+    } catch { notify("Pencarian gagal", "red") }
     setSearching(false)
   }
 
@@ -1806,10 +1835,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24 }}>
               <div>
                 <h2 style={{ fontSize:28,fontWeight:900,color:T.t1,marginBottom:8 }}>Screener IDX</h2>
-                <p style={{ fontSize:13,color:T.t2,lineHeight:1.6 }}>
-                  Data harga & breadth: <strong>IDX.co.id</strong> real-time via Vercel serverless.<br/>
-                  Fundamental (PE, PBV, DY, ROE): IDX · fallback data Q4/2024.
-                </p>
+
                 {!screenerLoaded && <div style={{ display:"flex",alignItems:"center",gap:8,marginTop:12,color:T.amber,fontSize:13,fontWeight:600 }}><Spinner/> Memuat data pasar...</div>}
               </div>
               <div style={{ display:"flex",gap:8,marginTop:8 }}>
