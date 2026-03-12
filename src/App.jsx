@@ -269,30 +269,71 @@ const Advisory = ({ type, text }) => {
   )
 }
 
-const BottomNav = ({ tab, setTab }) => {
+const BottomNav = ({ tab, setTab, journal }) => {
   const { T } = useTheme()
-  // Primary nav — always visible (5 items max for clean mobile)
+  const lastTap = React.useRef({})
+
   const primary = [
-    { id:"home",      label:"Home",      Icon:LayoutDashboard },
-    { id:"portfolio", label:"Porto",     Icon:PieChart },
-    { id:"screener",  label:"Screener",  Icon:Search },
-    { id:"jurnal",    label:"Jurnal",    Icon:BookOpen },
-    { id:"monitor",   label:"Monitor",   Icon:BarChart2 },
+    { id:"home",      label:"Home",     Icon:LayoutDashboard },
+    { id:"portfolio", label:"Porto",    Icon:PieChart },
+    { id:"screener",  label:"Screener", Icon:Search },
+    { id:"jurnal",    label:"Jurnal",   Icon:BookOpen },
+    { id:"monitor",   label:"Monitor",  Icon:BarChart2 },
   ]
-  const isActive = (id) => tab === id
-  const isPrimary = primary.some(p => p.id === tab)
+
+  const handleTap = (id) => {
+    const now = Date.now()
+    const last = lastTap.current[id] || 0
+    if (tab === id && now - last < 400) {
+      // Double-tap saat sudah di tab — scroll to top
+      const el = document.querySelector('.fu')
+      if (el) el.scrollTo({ top: 0, behavior: 'smooth' })
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    } else {
+      setTab(id)
+    }
+    lastTap.current[id] = now
+  }
 
   return (
     <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100 }}>
       {/* Blur backdrop */}
       <div style={{ position:"absolute",inset:0,background:T.navBg,backdropFilter:"blur(24px)",WebkitBackdropFilter:"blur(24px)",borderTop:`1px solid ${T.bdr2}` }}/>
+
+      {/* Floating action buttons — Cari & Beli + Jurnal */}
+      <div style={{ position:"absolute",top:-56,left:0,right:0,display:"flex",justifyContent:"center",gap:10,padding:"0 16px",pointerEvents:"none" }}>
+        <button
+          onClick={()=>setTab("screener")}
+          style={{ pointerEvents:"all",flex:1,maxWidth:180,background:T.em,border:"none",borderRadius:16,padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:`0 4px 20px ${T.em}55`,transition:"transform .15s" }}
+          onTouchStart={e=>e.currentTarget.style.transform="scale(0.96)"}
+          onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}
+        >
+          <Search size={16} color="#fff" strokeWidth={2.5}/>
+          <span style={{ fontSize:13,fontWeight:800,color:"#fff" }}>Cari & Beli</span>
+        </button>
+        <button
+          onClick={()=>setTab("jurnal")}
+          style={{ pointerEvents:"all",flex:1,maxWidth:180,background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:"0 4px 16px rgba(0,0,0,0.18)",transition:"transform .15s",backdropFilter:"blur(12px)" }}
+          onTouchStart={e=>e.currentTarget.style.transform="scale(0.96)"}
+          onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}
+        >
+          <BookOpen size={16} color={T.t2} strokeWidth={1.8}/>
+          <span style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Jurnal</span>
+          {journal?.length > 0 && (
+            <span style={{ fontSize:9,fontWeight:900,color:T.em,background:T.emBg,borderRadius:8,padding:"1px 5px",minWidth:16,textAlign:"center" }}>
+              {journal.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* Main nav tabs */}
       <div style={{ position:"relative",display:"flex",alignItems:"center",padding:`10px 6px calc(10px + env(safe-area-inset-bottom))`,gap:2 }}>
         {primary.map(({ id, label, Icon }) => {
-          const active = isActive(id)
+          const active = tab === id
           return (
-            <button key={id} onClick={()=>setTab(id)}
+            <button key={id} onClick={()=>handleTap(id)}
               style={{ flex:1,background:"none",border:"none",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,padding:"4px 2px",position:"relative",minWidth:0 }}>
-              {/* Active pill bg */}
               {active && (
                 <div style={{ position:"absolute",top:0,left:"50%",transform:"translateX(-50%)",width:44,height:44,borderRadius:14,background:T.emBg,transition:"all .2s" }}/>
               )}
@@ -1316,7 +1357,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           ]
 
           return (
-            <div style={{ maxWidth:480,margin:"0 auto",padding:"16px 16px 120px" }}>
+            <div style={{ maxWidth:480,margin:"0 auto",padding:"16px 16px 160px" }}>
 
               {/* ── Greeting ── */}
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
@@ -1330,6 +1371,11 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 </div>
                 <div style={{ display:"flex",gap:8,alignItems:"center" }}>
                   <ThemeBtn/>
+                  {/* Keluar */}
+                  <button onClick={()=>supabase.auth.signOut()} className="tap" title="Keluar"
+                    style={{ background:T.bg2,border:`1px solid ${T.bdr2}`,borderRadius:12,padding:"9px 10px",cursor:"pointer",display:"flex",alignItems:"center" }}>
+                    <LogOut size={15} color={T.t3}/>
+                  </button>
                   {/* Bell button — pindah ke Home */}
                   <button onClick={()=>{ if(!pushEnabled) requestPush(); else { setShowNotifPanel(p=>!p); setNotifBadge(0) } }}
                     disabled={pushLoading} className="tap" title={pushEnabled?"Alert":"Aktifkan notifikasi"}
@@ -1500,25 +1546,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                 </div>
               )}
 
-              {/* ── Quick actions ── */}
-              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:20 }}>
-                <button onClick={()=>setTab("screener")}
-                  style={{ background:T.emBg,border:`1px solid ${T.em}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
-                  <Search size={18} color={T.em}/>
-                  <div style={{ textAlign:"left" }}>
-                    <div style={{ fontSize:13,fontWeight:800,color:T.em }}>Cari & Beli</div>
-                    <div style={{ fontSize:10,color:T.t3 }}>Cari saham dulu di Screener</div>
-                  </div>
-                </button>
-                <button onClick={()=>setTab("jurnal")}
-                  style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
-                  <BookOpen size={18} color={T.t2} strokeWidth={1.6}/>
-                  <div style={{ textAlign:"left" }}>
-                    <div style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Jurnal</div>
-                    <div style={{ fontSize:10,color:T.t3 }}>{journal.length} transaksi</div>
-                  </div>
-                </button>
-              </div>
+
 
               {/* ── Edukasi Bandarmologi ── */}
               {(() => {
@@ -1640,9 +1668,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                       </button>
                     )}
                   </div>
-                  <button onClick={()=>supabase.auth.signOut()} className="tap" style={{ background:T.bg3,border:`1px solid ${T.bdr2}`,padding:"8px 12px",borderRadius:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6 }}>
-                    <LogOut size={14} color={T.t2}/><span style={{ fontSize:12,color:T.t2,fontWeight:700 }}>Keluar</span>
-                  </button>
+
                   <div style={{ fontSize:10,color:T.t3,fontWeight:700,display:"flex",alignItems:"center",gap:4 }}>
                     {syncing?<><Spinner size={10}/> SYNC...</>:<><span style={{ width:6,height:6,borderRadius:"50%",background:T.green,display:"inline-block" }} className="pulse"/> LIVE {lastSync}</>}
                   </div>
@@ -2458,7 +2484,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           <p style={{ fontSize:11,color:T.t3,textAlign:"center",marginTop:12 }}>Garansi uang kembali 7 hari · Batalkan kapan saja</p>
         </Modal>
 
-        <BottomNav tab={tab} setTab={setTab}/>
+        <BottomNav tab={tab} setTab={setTab} journal={journal}/>
 
 
         {/* ══ STRATEGI & SIMULASI ══ */}
