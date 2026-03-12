@@ -433,6 +433,8 @@ export default function App() {
   const [notifLog,       setNotifLog]       = useState([])   // per user, reset on signout
   const [notifBadge,     setNotifBadge]     = useState(0)
   const [eduOpen,        setEduOpen]        = useState(false)
+  const [idxBreadth,     setIdxBreadth]     = useState(null)   // data breadth dari IDX
+  const [idxBreadthLoading, setIdxBreadthLoading] = useState(false)
   const [eduTab,         setEduTab]         = useState(0)
   const [showNotifPanel, setShowNotifPanel] = useState(false)
   const notifUserRef = React.useRef(null)  // track which user owns notifLog
@@ -488,56 +490,115 @@ export default function App() {
   // Run: node scripts/update-idx-data.js  (atau upload Excel baru)
   const loadScreener = useCallback(async () => {
     setSyncing(true)
+
+    // ── Tahap 1: Load struktur dari idx_stocks.json (nama, sektor, fundamental statis) ──
+    let staticMap = {}
     try {
-      // Load static JSON — 958 saham, fundamental + harga IDX
-      const ts = new Date().toISOString().slice(0,10)
+      const ts  = new Date().toISOString().slice(0, 10)
       const res = await fetch(`/idx_stocks.json?v=${ts}`)
       if (res.ok) {
         const json = await res.json()
-        const raw = (json.data || []).filter(s => s.c)
-        const arr = raw.map(s => {
-          const dy_val = Number(s.dy) > 0 ? Number(s.dy) : (STATIC_DY[s.c] || 0)
-          return {
-            ...s,
-            price:  Number(s.price)  || 0,
-            chgPct: Number(s.chgPct ?? s.chgpct) || 0,
-            chg:    Number(s.chg)    || 0,
-            pe:     Number(s.pe)     || 0,
-            pbv:    Number(s.pbv)    || 0,
-            roe:    Number(s.roe)    || 0,
-            dy:     dy_val,
-            roa:    Number(s.roa)    || 0,
-            der:    Number(s.der)    || 0,
-            npm:    Number(s.npm)    || 0,
-            vol:    Number(s.vol)    || 0,
-          }
-        })
-        if (arr.length > 100) {
-          setScreenerData(arr)
-          const dict = {}
-          arr.forEach(s => { dict[s.c] = s })
-          setLiveCache(p => ({ ...p, ...dict }))
-          setLastSync(getCurrentTimeString())
-          setScreenerLoaded(true)
-          notify(`✓ ${arr.length} saham IDX dimuat · harga sync tiap 30 detik`, "green")
-          setSyncing(false)
-          return
-        }
+        ;(json.data || []).filter(s => s.c).forEach(s => { staticMap[s.c] = s })
       }
     } catch(e) { console.warn("idx_stocks.json:", e.message) }
 
-    // Fallback: Yahoo API untuk saham-saham populer
+    // ── Tahap 2: Fetch harga real-time dari /api/idx-quote (semua saham, paginasi) ──
+    let allStocks = []
+    try {
+      const PSIZE = 200
+      // Ambil halaman pertama untuk tahu total
+      const r0 = await fetch(`/api/idx-quote?all=1&page=0&size=${PSIZE}`, { signal: AbortSignal.timeout(20000) })
+      if (r0.ok) {
+        const d0  = await r0.json()
+        allStocks = d0.data || []
+        const total = d0.total || allStocks.length
+        const pages = Math.min(Math.ceil(total / PSIZE), 6) // max 6 halaman = 1200 saham
+
+        // Fetch halaman berikutnya secara parallel
+        if (pages > 1) {
+          const tasks = []
+          for (let p = 1; p < pages; p++) tasks.push(
+            fetch(`/api/idx-quote?all=1&page=${p}&size=${PSIZE}`, { signal: AbortSignal.timeout(20000) })
+              .then(r => r.ok ? r.json() : null)
+              .then(d => d?.data || [])
+              .catch(() => [])
+          )
+          const more = await Promise.all(tasks)
+          for (const page of more) allStocks = allStocks.concat(page)
+        }
+      }
+    } catch(e) { console.warn("idx-quote:", e.message) }
+
+    // ── Tahap 3: Merge IDX harga + staticMap fundamental ──
+    if (allStocks.length > 50) {
+      const arr = allStocks.map(s => {
+        const stat   = staticMap[s.code] || staticMap[s.c] || {}
+        const dy_val = s.dy > 0 ? s.dy : (stat.dy || STATIC_DY[s.code] || 0)
+        return {
+          c:      s.code || s.c,
+          n:      s.name || stat.n || s.code,
+          price:  s.price  || 0,
+          chgPct: s.chgPct || 0,
+          chg:    s.change || 0,
+          volume: s.volume || 0,
+          avgVolume: s.avgVolume || 0,
+          volRatio:  s.volRatio  || 0,
+          high:   s.high   || 0,
+          low:    s.low    || 0,
+          wk52H:  s.wk52H  || stat.wk52H || 0,
+          wk52L:  s.wk52L  || stat.wk52L || 0,
+          mcap:   s.mcap   || stat.mcap  || 0,
+          sector: s.sector || stat.sector || '',
+          pe:     s.pe  > 0 ? s.pe  : (stat.pe  || 0),
+          pbv:    s.pbv > 0 ? s.pbv : (stat.pbv || 0),
+          dy:     dy_val,
+          roe:    s.roe > 0 ? s.roe : (stat.roe || 0),
+          der:    s.der > 0 ? s.der : (stat.der || 0),
+          npm:    s.npm > 0 ? s.npm : (stat.npm || 0),
+          roa:    stat.roa || 0,
+          vol:    s.volume || stat.vol || 0,
+        }
+      }).filter(s => s.c)
+
+      setScreenerData(arr)
+      const dict = {}
+      arr.forEach(s => { dict[s.c] = s })
+      setLiveCache(p => ({ ...p, ...dict }))
+      setLastSync(getCurrentTimeString())
+      setScreenerLoaded(true)
+      notify(`✓ ${arr.length} saham IDX real-time · sumber: IDX.co.id`, "green")
+      setSyncing(false)
+      return
+    }
+
+    // ── Fallback: gunakan idx_stocks.json statis ──
+    const staticArr = Object.values(staticMap)
+    if (staticArr.length > 100) {
+      const arr = staticArr.map(s => ({
+        ...s,
+        price:  Number(s.price)  || 0,
+        chgPct: Number(s.chgPct ?? s.chgpct) || 0,
+        dy:     Number(s.dy) > 0 ? Number(s.dy) : (STATIC_DY[s.c] || 0),
+      }))
+      setScreenerData(arr)
+      const dict = {}; arr.forEach(s => { dict[s.c] = s })
+      setLiveCache(p => ({ ...p, ...dict }))
+      setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
+      notify(`✓ ${arr.length} saham (data statis — IDX tidak tersedia)`, "amber")
+      setSyncing(false)
+      return
+    }
+
+    // ── Fallback akhir: Yahoo ──
     try {
       const data = await fetchBatchLiveQuotes(POPULAR_IDX_SYMBOLS)
-      const arr = Object.values(data)
-      if (arr.length > 0) {
-        setScreenerData(arr)
-        const dict = {}; arr.forEach(i => { dict[i.c] = i })
-        setLiveCache(p => ({ ...p, ...dict }))
-        setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
-        notify(`✓ ${arr.length} saham (fallback mode)`, "amber")
-      } else { notify("Gagal memuat data pasar", "red") }
-    } catch(e) { notify("Error: " + e.message, "red") }
+      const arr  = Object.values(data)
+      setScreenerData(arr)
+      const dict = {}; arr.forEach(i => { dict[i.c] = i })
+      setLiveCache(p => ({ ...p, ...dict }))
+      setLastSync(getCurrentTimeString()); setScreenerLoaded(true)
+      notify(`✓ ${arr.length} saham (Yahoo fallback)`, "amber")
+    } catch(e) { notify("Error memuat screener: " + e.message, "red") }
     setSyncing(false)
   }, [notify])
 
@@ -563,6 +624,35 @@ export default function App() {
     }
   }, [])
 
+  // ── Fetch harga dari IDX via /api/idx-quote, fallback ke Yahoo ──────────
+  const fetchPricesIDX = useCallback(async (codes) => {
+    if (!codes?.length) return {}
+    try {
+      const params = codes.join(',')
+      const res = await fetch(`/api/idx-quote?symbols=${encodeURIComponent(params)}`, { signal: AbortSignal.timeout(20000) })
+      if (res.ok) {
+        const json = await res.json()
+        const result = {}
+        for (const [code, item] of Object.entries(json?.data || {})) {
+          // Map IDX format → liveCache format (sama dgn Yahoo)
+          result[code] = {
+            c: code, n: item.name || code,
+            price: item.price, chgPct: item.chgPct,
+            volume: item.volume, avgVolume: item.avgVolume || 0,
+            high: item.high, low: item.low,
+            wk52H: item.wk52H, wk52L: item.wk52L,
+            mcap: item.mcap || 0,
+            pe: item.pe || 0, pbv: item.pbv || 0, dy: item.dy || 0,
+            volRatio: item.volRatio || 0,
+          }
+        }
+        if (Object.keys(result).length > 0) return result
+      }
+    } catch(e) { console.warn('IDX quote:', e.message) }
+    // Fallback ke Yahoo jika IDX gagal
+    return await fetchBatchLiveQuotes(codes)
+  }, [])
+
   const syncPrices = useCallback(async () => {
     setSyncing(true)
     // Kumpulkan semua kode: portfolio + screener yang sedang tampil (max 30)
@@ -571,7 +661,7 @@ export default function App() {
     const allCodes       = [...new Set([...portfolioCodes, ...screenerRef])].filter(Boolean)
     if (!allCodes.length) { setSyncing(false); return }
 
-    const upd = await fetchBatchLiveQuotes(allCodes)
+    const upd = await fetchPricesIDX(allCodes)
     if (Object.keys(upd).length > 0) {
       setLiveCache(prev => {
         const next = { ...prev }
@@ -717,40 +807,24 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
 
   const loadCorpActions = useCallback(async () => {
     setCorpLoading(true)
-    const past30   = new Date(Date.now()-30*86400000).toISOString().slice(0,10)
-    const future6m = new Date(Date.now()+180*86400000).toISOString().slice(0,10)
-    const idxUrl   = `https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=300&type=&startDate=${past30}&endDate=${future6m}`
-    // Multiple proxy fallbacks — allorigins kadang timeout
-    const proxies  = [
-      `https://api.allorigins.win/get?url=${encodeURIComponent(idxUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(idxUrl)}`,
-    ]
-    const parseRows = (data) => (data?.data||[]).map(item=>({
-      code:       (item.EfectCode||item.StockCode||"").toUpperCase().trim(),
-      name:       item.CompanyName||item.Name||"",
-      type:       item.CorporateActionType||item.Type||"Lainnya",
-      desc:       item.Ratio||item.Description||item.Value||"",
-      recordDate: (item.RecordDate||item.CumDate||"").slice(0,10),
-      payDate:    (item.PaymentDate||item.ExDate||"").slice(0,10),
-    })).filter(r => r.code && r.recordDate)
-
-    let fetched = false
-    for (const proxyUrl of proxies) {
-      try {
-        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(15000) })
-        if (!res.ok) continue
-        const wrapper = await res.json()
-        // allorigins wraps in {contents}, corsproxy.io returns raw
-        const raw     = wrapper.contents !== undefined ? wrapper.contents : JSON.stringify(wrapper)
-        const data    = JSON.parse(raw || "{}")
-        const rows    = parseRows(data)
+    try {
+      // Langsung pakai Vercel serverless /api/idx-corp — tanpa proxy 3rd party
+      const res = await fetch('/api/idx-corp?months=6', { signal: AbortSignal.timeout(20000) })
+      if (res.ok) {
+        const json = await res.json()
+        const rows = json?.data || []
         if (rows.length > 5) {
-          setCorpActions(rows); window.__corpActions__ = rows
-          fetched = true; break
+          setCorpActions(rows)
+          window.__corpActions__ = rows
+          setCorpLoaded(true)
+          setCorpLoading(false)
+          return
         }
-      } catch(e) { console.warn("Corp action:", proxyUrl.slice(8,30), e.message) }
-    }
-    if (!fetched) { setCorpActions(CORP_FALLBACK); window.__corpActions__ = CORP_FALLBACK }
+      }
+    } catch(e) { console.warn("Corp action API:", e.message) }
+    // Fallback ke data statis
+    setCorpActions(CORP_FALLBACK)
+    window.__corpActions__ = CORP_FALLBACK
     setCorpLoaded(true)
     setCorpLoading(false)
   }, [])
@@ -759,6 +833,25 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
   useEffect(() => {
     if (session && !corpLoaded && !corpLoading) loadCorpActions()
   }, [session, loadCorpActions]) // loads as soon as session is ready
+
+  // ── Fetch IDX market breadth ──────────────────────────────
+  const loadIdxBreadth = useCallback(async () => {
+    if (idxBreadthLoading) return
+    setIdxBreadthLoading(true)
+    try {
+      const res = await fetch('/api/idx-breadth', { signal: AbortSignal.timeout(20000) })
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.breadth) setIdxBreadth(data)
+      }
+    } catch(e) { console.warn('IDX breadth:', e.message) }
+    setIdxBreadthLoading(false)
+  }, [idxBreadthLoading])
+
+  // Auto-load saat tab strategi dibuka
+  useEffect(() => {
+    if (session && tab === 'strategi' && !idxBreadth && !idxBreadthLoading) loadIdxBreadth()
+  }, [session, tab, idxBreadth, idxBreadthLoading, loadIdxBreadth])
 
   // ── Subscription: check trial status ─────────────────────
   const checkSubscription = useCallback((profile_) => {
@@ -1178,10 +1271,13 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
             .slice(0, 3)
 
           // Volume spikes from liveCache (quick calc)
+          const getVolRatio = (d) => d.volRatio > 0 ? d.volRatio
+            : (d.averageVolume > 0 ? d.volume / d.averageVolume
+            : (d.avgVolume > 0 ? d.volume / d.avgVolume : 0))
           const spikes_ = Object.entries(live_)
-            .filter(([,d]) => d.volume && d.averageVolume && d.volume/d.averageVolume >= 3)
-            .sort(([,a],[,b]) => (b.volume/b.averageVolume)-(a.volume/a.averageVolume))
-            .slice(0,3)
+            .filter(([,d]) => d.price > 0 && getVolRatio(d) >= 2)
+            .sort(([,a],[,b]) => getVolRatio(b) - getVolRatio(a))
+            .slice(0, 5)
 
           // Secondary menu tiles
           const menuTiles = [
@@ -1352,7 +1448,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                     <button onClick={()=>setTab("screener")} style={{ fontSize:11,color:T.em,fontWeight:700,background:"none",border:"none",cursor:"pointer" }}>Screener →</button>
                   </div>
                   {spikes_.map(([code,d]) => {
-                    const ratio = (d.volume/d.averageVolume)
+                    const ratio = getVolRatio(d)
                     const chg   = d.chgPct||d.changePercent||0
                     return (
                       <div key={code} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${T.bdr}` }}>
@@ -1710,7 +1806,10 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
             <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24 }}>
               <div>
                 <h2 style={{ fontSize:28,fontWeight:900,color:T.t1,marginBottom:8 }}>Screener IDX</h2>
-                <p style={{ fontSize:13,color:T.t2,lineHeight:1.6 }}>Data live via server proxy. Fundamental: DY, PBV, PE, ROE.</p>
+                <p style={{ fontSize:13,color:T.t2,lineHeight:1.6 }}>
+                  Data harga & breadth: <strong>IDX.co.id</strong> real-time via Vercel serverless.<br/>
+                  Fundamental (PE, PBV, DY, ROE): IDX · fallback data Q4/2024.
+                </p>
                 {!screenerLoaded && <div style={{ display:"flex",alignItems:"center",gap:8,marginTop:12,color:T.amber,fontSize:13,fontWeight:600 }}><Spinner/> Memuat data pasar...</div>}
               </div>
               <div style={{ display:"flex",gap:8,marginTop:8 }}>
@@ -2347,16 +2446,31 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           const maxLoss      = isSmallCap ? 8  : 6    // % cut loss
           const maxPos       = isSmallCap ? 5  : 8    // max posisi bersamaan
 
-          // ── Market Condition Assessment ──
+          // ── Market Condition Assessment (IDX real data jika tersedia) ──
+          const useLiveData  = !!idxBreadth?.breadth
+          const breadth      = idxBreadth?.breadth || {}
           const liveStocks   = Object.values(liveCache)
-          const avgChg       = liveStocks.length > 0
-            ? liveStocks.reduce((s,x)=>s+(x.chgPct||0),0)/liveStocks.length : 0
-          const redCount     = liveStocks.filter(x=>(x.chgPct||0)<-1).length
-          const totalCount   = liveStocks.length || 1
+
+          // Pakai IDX breadth API jika ada, fallback ke liveCache screener
+          const avgChg       = useLiveData
+            ? (breadth.avgChg || 0)
+            : liveStocks.length > 0
+              ? liveStocks.reduce((s,x)=>s+(x.chgPct||0),0)/liveStocks.length : 0
+          const redCount     = useLiveData
+            ? (breadth.decDown1 || 0)
+            : liveStocks.filter(x=>(x.chgPct||0)<-1).length
+          const totalCount   = useLiveData
+            ? (idxBreadth.total || 1)
+            : liveStocks.length || 1
           const bearishPct   = Math.round((redCount/totalCount)*100)
-          const marketScore  = avgChg > 0.5 ? "BULLISH" : avgChg < -0.5 ? "BEARISH" : "SIDEWAYS"
+          const marketScore  = useLiveData
+            ? (breadth.condition || "SIDEWAYS")
+            : avgChg > 0.5 ? "BULLISH" : avgChg < -0.5 ? "BEARISH" : "SIDEWAYS"
           const dangerLevel  = bearishPct > 70 ? 90 : bearishPct > 50 ? 60 : bearishPct > 30 ? 30 : 10
           const suggestExit  = dangerLevel >= 70
+
+          // IHSG
+          const ihsg         = idxBreadth?.ihsg || null
 
           // ── 20-Year Simulation ──
           const simulate20yr = (initCap, annualRet, years=20) => {
@@ -2446,6 +2560,10 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           const mktBg    = marketScore==="BULLISH" ? T.gBg    : marketScore==="BEARISH" ? T.rBg    : T.aBg
           const mktBdr   = marketScore==="BULLISH" ? T.gBdr   : marketScore==="BEARISH" ? T.rBdr   : T.aBdr
 
+          // Breadth detail untuk display
+          const advCount = useLiveData ? (breadth.advance||0) : liveStocks.filter(x=>(x.chgPct||0)>0).length
+          const unchCount= useLiveData ? (breadth.unchanged||0) : liveStocks.filter(x=>(x.chgPct||0)===0).length
+
           return (
           <div className="fu" style={{ padding:"56px 20px 100px" }}>
 
@@ -2467,24 +2585,72 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
                   <div style={{ fontSize:10,fontWeight:800,color:mktColor,marginBottom:4,letterSpacing:"0.5px" }}>KONDISI PASAR SAAT INI</div>
                   <div style={{ fontSize:22,fontWeight:900,color:mktColor }}>{marketScore}</div>
                   <div style={{ fontSize:12,color:T.t2,marginTop:2 }}>
-                    {liveStocks.length > 0
-                      ? `${redCount} dari ${totalCount} saham di pantauan turun >1%`
-                      : "Data pasar belum dimuat — buka Screener dulu"}
+                    {useLiveData
+                      ? `${redCount} dari ${totalCount} saham IDX turun ≥1%`
+                      : liveStocks.length > 0
+                        ? `${redCount} dari ${totalCount} saham pantauan turun >1%`
+                        : "Memuat data..."}
                   </div>
+                  {/* IHSG value jika ada */}
+                  {ihsg && ihsg.value > 0 && (
+                    <div style={{ marginTop:6,display:"flex",alignItems:"center",gap:8 }}>
+                      <span style={{ fontSize:11,fontWeight:800,color:T.t3 }}>IHSG</span>
+                      <span style={{ fontSize:14,fontWeight:900,color:T.t1 }}>{ihsg.value.toLocaleString("id-ID",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                      <span style={{ fontSize:11,fontWeight:700,color:ihsg.chgPct>=0?T.green:T.red }}>
+                        {ihsg.chgPct>=0?"+":""}{ihsg.chgPct.toFixed(2)}%
+                      </span>
+                    </div>
+                  )}
                 </div>
                 <div style={{ textAlign:"right" }}>
                   <div style={{ fontSize:10,fontWeight:800,color:T.t3,marginBottom:4 }}>RISIKO LOSS</div>
                   <div style={{ fontSize:28,fontWeight:900,color:dangerLevel>=70?T.red:dangerLevel>=40?T.amber:T.green }}>
                     {dangerLevel}%
                   </div>
+                  {/* Refresh button */}
+                  <button onClick={loadIdxBreadth} disabled={idxBreadthLoading}
+                    style={{ marginTop:6,background:"none",border:`1px solid ${T.bdr2}`,borderRadius:8,padding:"4px 8px",cursor:"pointer",fontSize:9,color:T.t3,display:"flex",alignItems:"center",gap:4,marginLeft:"auto" }}>
+                    <RefreshCw size={9} color={T.t3} style={{ animation:idxBreadthLoading?"spin 1s linear infinite":"none" }}/>
+                    {idxBreadthLoading?"...":"Refresh"}
+                  </button>
                 </div>
               </div>
+              {/* Breadth bar: advance | unchanged | decline */}
+              {useLiveData && totalCount > 1 && (
+                <div style={{ marginBottom:8 }}>
+                  <div style={{ display:"flex",height:8,borderRadius:99,overflow:"hidden",gap:1,marginBottom:4 }}>
+                    <div style={{ flex:advCount,background:T.green }}/>
+                    <div style={{ flex:unchCount,background:T.t3 }}/>
+                    <div style={{ flex:redCount,background:T.red }}/>
+                  </div>
+                  <div style={{ display:"flex",justifyContent:"space-between",fontSize:9,color:T.t3 }}>
+                    <span style={{ color:T.green }}>▲ {advCount} naik</span>
+                    <span>— {unchCount} tetap</span>
+                    <span style={{ color:T.red }}>▼ {redCount} turun</span>
+                  </div>
+                </div>
+              )}
               {/* Risk bar */}
               <div style={{ height:6,background:T.bg0,borderRadius:99,marginBottom:12,overflow:"hidden" }}>
                 <div style={{ height:"100%", width:dangerLevel+"%",
                   background:`linear-gradient(90deg,${T.green},${dangerLevel>60?T.red:dangerLevel>30?T.amber:T.green})`,
                   borderRadius:99, transition:"width 0.8s" }}/>
               </div>
+              {/* Source badge */}
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8 }}>
+                <div style={{ fontSize:9,color:T.t3,fontStyle:"italic" }}>
+                  {useLiveData
+                    ? `Sumber: IDX.co.id real-time · ${new Date(idxBreadth?.timestamp||"").toLocaleTimeString("id-ID",{hour:"2-digit",minute:"2-digit"})}`
+                    : "Sumber: Yahoo Finance screener (estimasi)"}
+                </div>
+                {!useLiveData && (
+                  <button onClick={loadIdxBreadth} disabled={idxBreadthLoading}
+                    style={{ fontSize:9,color:T.em,background:"none",border:`1px solid ${T.em}`,borderRadius:6,padding:"2px 8px",cursor:"pointer" }}>
+                    {idxBreadthLoading ? "Loading IDX..." : "Muat Data IDX"}
+                  </button>
+                )}
+              </div>
+
               {/* Suggestion */}
               {suggestExit ? (
                 <div style={{ background:T.rBg,border:`1px solid ${T.rBdr}`,borderRadius:14,padding:"14px 16px" }}>
