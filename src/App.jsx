@@ -719,26 +719,38 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
     setCorpLoading(true)
     const past30   = new Date(Date.now()-30*86400000).toISOString().slice(0,10)
     const future6m = new Date(Date.now()+180*86400000).toISOString().slice(0,10)
-    // IDX blocks direct fetch via CORS on production — route through allorigins proxy
     const idxUrl   = `https://idx.co.id/umbraco/Surface/CorporateAction/GetCorporateActionList?start=0&length=300&type=&startDate=${past30}&endDate=${future6m}`
-    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(idxUrl)}`
-    try {
-      const res = await fetch(proxyUrl, { signal:AbortSignal.timeout(12000) })
-      if (res.ok) {
+    // Multiple proxy fallbacks — allorigins kadang timeout
+    const proxies  = [
+      `https://api.allorigins.win/get?url=${encodeURIComponent(idxUrl)}`,
+      `https://corsproxy.io/?${encodeURIComponent(idxUrl)}`,
+    ]
+    const parseRows = (data) => (data?.data||[]).map(item=>({
+      code:       (item.EfectCode||item.StockCode||"").toUpperCase().trim(),
+      name:       item.CompanyName||item.Name||"",
+      type:       item.CorporateActionType||item.Type||"Lainnya",
+      desc:       item.Ratio||item.Description||item.Value||"",
+      recordDate: (item.RecordDate||item.CumDate||"").slice(0,10),
+      payDate:    (item.PaymentDate||item.ExDate||"").slice(0,10),
+    })).filter(r => r.code && r.recordDate)
+
+    let fetched = false
+    for (const proxyUrl of proxies) {
+      try {
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(15000) })
+        if (!res.ok) continue
         const wrapper = await res.json()
-        const data    = JSON.parse(wrapper.contents || "{}")
-        const rows = (data?.data||[]).map(item=>({
-          code:       (item.EfectCode||item.StockCode||"").toUpperCase().trim(),
-          name:       item.CompanyName||item.Name||"",
-          type:       item.CorporateActionType||item.Type||"Lainnya",
-          desc:       item.Ratio||item.Description||item.Value||"",
-          recordDate: (item.RecordDate||item.CumDate||"").slice(0,10),
-          payDate:    (item.PaymentDate||item.ExDate||"").slice(0,10),
-        })).filter(r => r.code && r.recordDate)
-        setCorpActions(rows.length > 5 ? rows : CORP_FALLBACK)
-        window.__corpActions__ = rows.length > 5 ? rows : CORP_FALLBACK
-      } else { setCorpActions(CORP_FALLBACK); window.__corpActions__ = CORP_FALLBACK }
-    } catch(e) { console.warn("Corp action:", e.message); setCorpActions(CORP_FALLBACK); window.__corpActions__ = CORP_FALLBACK }
+        // allorigins wraps in {contents}, corsproxy.io returns raw
+        const raw     = wrapper.contents !== undefined ? wrapper.contents : JSON.stringify(wrapper)
+        const data    = JSON.parse(raw || "{}")
+        const rows    = parseRows(data)
+        if (rows.length > 5) {
+          setCorpActions(rows); window.__corpActions__ = rows
+          fetched = true; break
+        }
+      } catch(e) { console.warn("Corp action:", proxyUrl.slice(8,30), e.message) }
+    }
+    if (!fetched) { setCorpActions(CORP_FALLBACK); window.__corpActions__ = CORP_FALLBACK }
     setCorpLoaded(true)
     setCorpLoading(false)
   }, [])
