@@ -269,7 +269,7 @@ const Advisory = ({ type, text }) => {
   )
 }
 
-const BottomNav = ({ tab, setTab, journal }) => {
+const BottomNav = ({ tab, setTab }) => {
   const { T } = useTheme()
   const lastTap = React.useRef({})
 
@@ -299,33 +299,6 @@ const BottomNav = ({ tab, setTab, journal }) => {
     <div style={{ position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:100 }}>
       {/* Blur backdrop */}
       <div style={{ position:"absolute",inset:0,background:T.navBg,backdropFilter:"blur(24px)",WebkitBackdropFilter:"blur(24px)",borderTop:`1px solid ${T.bdr2}` }}/>
-
-      {/* Floating action buttons — Cari & Beli + Jurnal */}
-      <div style={{ position:"absolute",top:-56,left:0,right:0,display:"flex",justifyContent:"center",gap:10,padding:"0 16px",pointerEvents:"none" }}>
-        <button
-          onClick={()=>setTab("screener")}
-          style={{ pointerEvents:"all",flex:1,maxWidth:180,background:T.em,border:"none",borderRadius:16,padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:`0 4px 20px ${T.em}55`,transition:"transform .15s" }}
-          onTouchStart={e=>e.currentTarget.style.transform="scale(0.96)"}
-          onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}
-        >
-          <Search size={16} color="#fff" strokeWidth={2.5}/>
-          <span style={{ fontSize:13,fontWeight:800,color:"#fff" }}>Cari & Beli</span>
-        </button>
-        <button
-          onClick={()=>setTab("jurnal")}
-          style={{ pointerEvents:"all",flex:1,maxWidth:180,background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,boxShadow:"0 4px 16px rgba(0,0,0,0.18)",transition:"transform .15s",backdropFilter:"blur(12px)" }}
-          onTouchStart={e=>e.currentTarget.style.transform="scale(0.96)"}
-          onTouchEnd={e=>e.currentTarget.style.transform="scale(1)"}
-        >
-          <BookOpen size={16} color={T.t2} strokeWidth={1.8}/>
-          <span style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Jurnal</span>
-          {journal?.length > 0 && (
-            <span style={{ fontSize:9,fontWeight:900,color:T.em,background:T.emBg,borderRadius:8,padding:"1px 5px",minWidth:16,textAlign:"center" }}>
-              {journal.length}
-            </span>
-          )}
-        </button>
-      </div>
 
       {/* Main nav tabs */}
       <div style={{ position:"relative",display:"flex",alignItems:"center",padding:`10px 6px calc(10px + env(safe-area-inset-bottom))`,gap:2 }}>
@@ -1357,7 +1330,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           ]
 
           return (
-            <div style={{ maxWidth:480,margin:"0 auto",padding:"16px 16px 160px" }}>
+            <div style={{ maxWidth:480,margin:"0 auto",padding:"16px 16px 120px" }}>
 
               {/* ── Greeting ── */}
               <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
@@ -1547,6 +1520,26 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
               )}
 
 
+
+              {/* ── Quick Actions ── */}
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16 }}>
+                <button onClick={()=>setTab("screener")} className="tap"
+                  style={{ background:T.emBg,border:`1px solid ${T.em}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
+                  <Search size={18} color={T.em}/>
+                  <div style={{ textAlign:"left" }}>
+                    <div style={{ fontSize:13,fontWeight:800,color:T.em }}>Cari & Beli</div>
+                    <div style={{ fontSize:10,color:T.t3 }}>Buka Screener IDX</div>
+                  </div>
+                </button>
+                <button onClick={()=>setTab("jurnal")} className="tap"
+                  style={{ background:T.bg1,border:`1px solid ${T.bdr2}`,borderRadius:16,padding:"14px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
+                  <BookOpen size={18} color={T.t2} strokeWidth={1.6}/>
+                  <div style={{ textAlign:"left" }}>
+                    <div style={{ fontSize:13,fontWeight:800,color:T.t1 }}>Jurnal</div>
+                    <div style={{ fontSize:10,color:T.t3 }}>{journal.length} transaksi</div>
+                  </div>
+                </button>
+              </div>
 
               {/* ── Edukasi Bandarmologi ── */}
               {(() => {
@@ -2484,7 +2477,7 @@ Avg baru: Rp${newAvg.toFixed(0)} | Alokasi ≤20%. Buka app → tap "Tambah".`,`
           <p style={{ fontSize:11,color:T.t3,textAlign:"center",marginTop:12 }}>Garansi uang kembali 7 hari · Batalkan kapan saja</p>
         </Modal>
 
-        <BottomNav tab={tab} setTab={setTab} journal={journal}/>
+        <BottomNav tab={tab} setTab={setTab}/>
 
 
         {/* ══ STRATEGI & SIMULASI ══ */}
